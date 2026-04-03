@@ -498,6 +498,29 @@ function renderResults(books) {
   });
   el.innerHTML = html;
   document.getElementById('clear-btn').classList.remove('hidden');
+
+  // Background: enrich any special editions so their age/romance badges reflect
+  // the richer description and categories from the canonical edition.
+  // Runs after the initial render so it never delays showing results.
+  books.forEach((book, i) => {
+    const lc = book.title.toLowerCase();
+    if (!EDITION_WORD_RE.test(lc) || !lc.includes('edition') || book.description) return;
+    enrichSpecialEdition(book).then(enriched => {
+      if (enriched === book) return; // nothing changed
+      currentResults[i] = enriched; // update so detail view gets richer data on tap
+      // Patch the badge row in the already-rendered card
+      const card = document.querySelector(`[data-card-idx="${i}"]`);
+      if (!card) return;
+      const badgesEl = card.querySelector('.book-badges');
+      if (!badgesEl) return;
+      const newAge    = ageRating(enriched);
+      const newColour = AGE_COLOURS[newAge] || '#9B804A';
+      const newIcon   = AGE_ICONS[newAge] || '';
+      const newRomance = hasRomanticThemes(enriched)
+        ? `<span class="badge badge-romance">${HEART_SVG}Romance</span>` : '';
+      badgesEl.innerHTML = `<span class="badge badge-age" style="--badge-color:${newColour}">${newIcon}${escHtml(newAge)}</span>${newRomance}`;
+    });
+  });
 }
 
 function renderPlaceholder() {
@@ -545,7 +568,7 @@ function bookCardHTML(book, idx) {
   const romance = hasRomanticThemes(book)
     ? `<span class="badge badge-romance">${HEART_SVG}Romance</span>` : '';
 
-  return `<div class="book-card" onclick="openBookByIndex(${idx})" role="button" tabindex="0"
+  return `<div class="book-card" data-card-idx="${idx}" onclick="openBookByIndex(${idx})" role="button" tabindex="0"
     onkeydown="if(event.key==='Enter')openBookByIndex(${idx})">
     <div class="book-thumb">${thumb}</div>
     <div class="book-info">
@@ -578,54 +601,69 @@ function openDetail(book) {
   const baseAge     = ageRating(book);
   const baseRomance = hasRomanticThemes(book);
 
-  // Lazy-load description. Prefer descWorksId (set by enrichSpecialEdition to
-  // the main-edition works key) so enriched books don't re-fetch from the sparse
-  // deluxe-edition record; fall back to book.id for non-enriched books.
-  const descKey = book.descWorksId ?? book.id;
-  if (descKey && descKey.startsWith('/works/')) {
-    fetchDescription(descKey).then(desc => {
-      // Guard: if user has already navigated to a different book, discard result
-      if (book.id !== currentDetailId) return;
-      if (!desc) return;
-
-      // Update description text
-      const el = document.getElementById('detail-desc-text');
-      if (el) {
-        el.dataset.full = desc;
-        el.textContent = desc.length > 400 ? desc.slice(0, 400) + '…' : desc;
-        const section = document.getElementById('detail-desc-section');
-        if (section) section.classList.remove('hidden');
-        const btn = document.getElementById('detail-desc-toggle');
-        if (btn && desc.length <= 400) btn.classList.add('hidden');
+  // Applies a freshly-loaded description to the open detail view.
+  // Updates the text element, reveals the section, and re-evaluates
+  // age/romance ratings so they reflect the description text.
+  const applyDesc = desc => {
+    if (!desc || book.id !== currentDetailId) return;
+    const el = document.getElementById('detail-desc-text');
+    if (el) {
+      el.dataset.full = desc;
+      el.textContent = desc.length > 400 ? desc.slice(0, 400) + '\u2026' : desc;
+      const section = document.getElementById('detail-desc-section');
+      if (section) section.classList.remove('hidden');
+      const btn = document.getElementById('detail-desc-toggle');
+      if (btn) btn.style.display = desc.length <= 400 ? 'none' : '';
+    }
+    const bookWithDesc = Object.assign({}, book, { description: desc });
+    const newAge     = ageRating(bookWithDesc);
+    const newRomance = hasRomanticThemes(bookWithDesc);
+    if (newAge !== baseAge || newRomance !== baseRomance) {
+      const row = document.getElementById('detail-ratings-row');
+      if (row) {
+        const colour = AGE_COLOURS[newAge] || '#9B804A';
+        const romanceCard = newRomance ? `
+          <div class="rating-card">
+            <span class="rating-icon" style="color:#D16B8F">♥</span>
+            <span class="rating-label">Romance</span>
+            <span class="rating-sub">Romantic themes</span>
+          </div>` : '';
+        row.innerHTML = `
+          <div class="rating-card">
+            <span class="rating-icon" style="color:${colour}">${ageIcon(newAge)}</span>
+            <span class="rating-label">${escHtml(newAge)}</span>
+            <span class="rating-sub">${escHtml(ageRange(newAge))}</span>
+          </div>
+          ${romanceCard}`;
       }
+    }
+  };
 
-      // Re-evaluate age/romance now that description is available.
-      // Books with sparse subjects (e.g. Butcher & Blackbird) may only reveal
-      // their rating and romantic themes through the description text.
-      const bookWithDesc = Object.assign({}, book, { description: desc });
-      const newAge     = ageRating(bookWithDesc);
-      const newRomance = hasRomanticThemes(bookWithDesc);
-      if (newAge !== baseAge || newRomance !== baseRomance) {
-        const row = document.getElementById('detail-ratings-row');
-        if (row) {
-          const colour = AGE_COLOURS[newAge] || '#9B804A';
-          const romanceCard = newRomance ? `
-            <div class="rating-card">
-              <span class="rating-icon" style="color:#D16B8F">♥</span>
-              <span class="rating-label">Romance</span>
-              <span class="rating-sub">Romantic themes</span>
-            </div>` : '';
-          row.innerHTML = `
-            <div class="rating-card">
-              <span class="rating-icon" style="color:${colour}">${ageIcon(newAge)}</span>
-              <span class="rating-label">${escHtml(newAge)}</span>
-              <span class="rating-sub">${escHtml(ageRange(newAge))}</span>
-            </div>
-            ${romanceCard}`;
-        }
+  // Lazy-load description in the background (non-blocking).
+  // Phase 1: try the direct works endpoint (descWorksId for enriched books,
+  //          book.id for regular lookups).
+  // Phase 2: if that returns nothing AND the title has edition qualifiers,
+  //          run enrichSpecialEdition to locate the canonical edition and
+  //          pull its description. This handles books opened via title/author
+  //          search where enrichment hasn't run yet.
+  (async () => {
+    const descKey = book.descWorksId ?? book.id;
+    let desc = descKey?.startsWith('/works/')
+      ? await fetchDescription(descKey)
+      : null;
+
+    if (!desc) {
+      // Fallback: enrich special editions whose description lives on a
+      // different works record (e.g. deluxe edition → main edition).
+      const lc = book.title.toLowerCase();
+      if (EDITION_WORD_RE.test(lc) && lc.includes('edition')) {
+        const enriched = await enrichSpecialEdition(book);
+        desc = enriched.description ?? null;
       }
-    });
-  }
+    }
+
+    applyDesc(desc);
+  })();
 }
 
 function closeDetail() {
