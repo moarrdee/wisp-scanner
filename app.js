@@ -40,106 +40,198 @@ function switchTab(tab) {
   else stopScanner();
 }
 
-// ── Scanner ───────────────────────────────────────────────────────────────────
-// Uses Quagga2 for EAN/UPC decoding via canvas — works on iOS Safari and all
-// mobile browsers. BarcodeDetector is NOT used (not available on iOS).
+// ── Scanner (ZBar WASM) ───────────────────────────────────────────────────────
+// Uses @undecaf/zbar-wasm for EAN/UPC decoding via WebAssembly.
+// ZBar's C++ core runs in WASM — significantly more accurate than Quagga2
+// (pure-JS) for EAN-13 book barcodes on iOS Safari. No BarcodeDetector API
+// dependency (unavailable/broken on iOS through at least iOS 18).
 
-let quaggaRunning = false;
-let lastScanned   = null;
+// Load ZBar WASM immediately on page load so it's ready by the time the user
+// taps the camera button. Dynamic import() works in non-module scripts on
+// iOS Safari 14.1+ (ES2020 support). The module fetches its own .wasm file
+// from the same CDN origin (CORS: Access-Control-Allow-Origin: *).
+let _scanFn = null;
+import('https://cdn.jsdelivr.net/npm/@undecaf/zbar-wasm@0.11.0/dist/index.mjs')
+  .then(m => { _scanFn = m.scanImageData; })
+  .catch(() => {}); // non-fatal; scanner surfaces its own error if still null
+
+let _videoEl    = null;  // <video> showing live camera feed
+let _procCanvas = null;  // offscreen canvas for ZBar — reused each frame
+let _procCtx    = null;
+let _rafId      = null;  // requestAnimationFrame handle
+let _scanning   = false; // true while the decode loop should run
+let _frameReady = true;  // false while a ZBar decode is awaiting
+let lastScanned = null;
+let _readCounts = {};    // { isbn: score } — hit/miss sliding window
+
+// Scan zone dimensions — must match CSS #scan-box width/height.
+const SCAN_ZONE_W = 280;
+const SCAN_ZONE_H = 120;
+
+// Confirmation threshold. Score += 2 per hit, -= 1 per miss, confirm at >= 3.
+// Equivalent to requiring 2 consecutive reads but tolerant of one missed frame.
+const CONFIRM_SCORE = 3;
 
 function startScanner() {
-  const fallback = document.getElementById('scan-fallback');
   const area     = document.getElementById('scanner-area');
-
+  const fallback = document.getElementById('scan-fallback');
   area.classList.remove('hidden');
   fallback.classList.add('hidden');
   stopScanner();
-
-  // Remove any video/canvas elements Quagga left from a previous session.
-  // Without this, re-initialising injects new elements behind the stale ones,
-  // producing a black screen — the old canvas sits on top, the new video beneath.
-  area.querySelectorAll('video, canvas').forEach(el => el.remove());
 
   if (!navigator.mediaDevices?.getUserMedia) {
     showScanFallback('Camera not supported in this browser.');
     return;
   }
 
-  Quagga.init({
-    inputStream: {
-      type: 'LiveStream',
-      target: document.getElementById('scanner-area'),
-      constraints: {
-        facingMode: 'environment',
-        width:  { ideal: 1280 },
-        height: { ideal: 720 },
-      },
-      // Quagga draws its own canvas overlay — we don't need it
-      willReadFrequently: true,
-    },
-    locator: {
-      // halfSample: true halves the image before processing — fast enough per frame
-      // on the single-threaded iOS path (numOfWorkers: 0) while still covering the
-      // full frame. patchSize 'medium' is the right balance for book barcodes.
-      patchSize: 'medium',
-      halfSample: true,
-    },
-    // No frequency cap — let Quagga process as many frames as the device allows.
-    // Difficult barcodes (foil covers, low contrast) may only decode on a small
-    // fraction of frames; more attempts per second means faster confirmed reads.
-    decoder: {
-      readers: ['ean_reader', 'ean_8_reader', 'upc_reader', 'upc_e_reader'],
-      multiple: false,
-    },
-    locate: true,
-    numOfWorkers: 0,   // Workers require SharedArrayBuffer which is blocked on iOS
-  }, function(err) {
-    if (err) {
-      showScanFallback(err.message || 'Camera unavailable.');
-      return;
-    }
-    quaggaRunning = true;
-    Quagga.start();
-  });
+  // Reuse the video element across sessions — avoids a Safari bug where creating
+  // a new <video> after a stream has been stopped sometimes blocks getUserMedia.
+  if (!_videoEl) {
+    _videoEl = document.createElement('video');
+    _videoEl.setAttribute('autoplay', '');
+    _videoEl.setAttribute('playsinline', ''); // required on iOS Safari
+    _videoEl.setAttribute('muted', '');
+    _videoEl.style.cssText =
+      'position:absolute;inset:0;width:100%;height:100%;object-fit:cover;z-index:1;';
+  }
+  area.appendChild(_videoEl);
 
-  Quagga.offDetected();  // remove any previous listener before adding new one
-  Quagga.onDetected(function(result) {
-    const code = result?.codeResult?.code;
-    if (!code) return;
-    let isbn = code.replace(/\D/g, '');
-    if (!isbn) return;
-
-    // Quagga's upc_reader fires on EAN-13 barcodes and strips the leading digit,
-    // producing a 12-digit code that is wrong (e.g. reads 978... as 78...).
-    // Validate the check digit and reject bad reads — keep scanning until we get
-    // a valid EAN-13 (13 digits) or ISBN-10 (10 digits).
-    if (!isValidISBNCode(isbn)) return;
-
-    if (isbn !== lastScanned) {
-      lastScanned = isbn;
-      flashScanBox();
-      handleScannedISBN(isbn);
-    }
-  });
+  navigator.mediaDevices.getUserMedia({
+    video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
+  })
+  .then(stream => {
+    _videoEl.srcObject = stream;
+    return _videoEl.play();
+  })
+  .then(() => {
+    _scanning   = true;
+    _frameReady = true;
+    lastScanned = null;
+    _readCounts = {};
+    _rafId = requestAnimationFrame(_scanLoop);
+  })
+  .catch(err => showScanFallback('Camera unavailable — ' + (err.message || err)));
 }
 
+function stopScanner() {
+  _scanning = false;
+  if (_rafId) { cancelAnimationFrame(_rafId); _rafId = null; }
+  if (_videoEl?.srcObject) {
+    _videoEl.srcObject.getTracks().forEach(t => t.stop());
+    _videoEl.srcObject = null;
+  }
+  _videoEl?.remove();
+  lastScanned = null;
+  _readCounts = {};
+  _frameReady = true;
+}
+
+// ── Frame decode loop ─────────────────────────────────────────────────────────
+let _lastFrameTs = 0;
+const FRAME_MS = 100; // decode at most every 100 ms (~10 fps)
+
+function _scanLoop(ts) {
+  if (!_scanning) return;
+
+  // Throttle: only decode if ZBar is idle and enough time has passed
+  if (ts - _lastFrameTs >= FRAME_MS && _frameReady && _scanFn &&
+      _videoEl?.readyState >= 2 && _videoEl.videoWidth) {
+    _lastFrameTs = ts;
+    _frameReady  = false;
+    _decodeFrame().finally(() => { _frameReady = true; });
+  }
+
+  _rafId = requestAnimationFrame(_scanLoop);
+}
+
+async function _decodeFrame() {
+  const vw = _videoEl.videoWidth;
+  const vh = _videoEl.videoHeight;
+  if (!vw || !vh) return;
+
+  // Map the visible scan zone to video pixel coordinates.
+  // The video fills the area via object-fit:cover, so we must apply the same
+  // scale factor the browser uses to crop the video to the area dimensions.
+  const area  = document.getElementById('scanner-area');
+  const aw    = area.clientWidth;
+  const ah    = area.clientHeight;
+  const scale = Math.max(vw / aw, vh / ah); // object-fit:cover scale
+
+  // Crop with ×1.4 padding on width, ×1.8 on height so barcodes held slightly
+  // outside the visible zone boundary still decode — ZBar is fast enough to
+  // handle a moderately larger region without meaningful latency increase.
+  const cropW = Math.min(Math.round(SCAN_ZONE_W * scale * 1.4), vw);
+  const cropH = Math.min(Math.round(SCAN_ZONE_H * scale * 1.8), vh);
+  const cropX = Math.max(0, Math.round(vw / 2 - cropW / 2));
+  const cropY = Math.max(0, Math.round(vh / 2 - cropH / 2));
+
+  if (!_procCanvas) {
+    _procCanvas = document.createElement('canvas');
+    _procCtx    = _procCanvas.getContext('2d', { willReadFrequently: true });
+  }
+  _procCanvas.width  = cropW;
+  _procCanvas.height = cropH;
+  _procCtx.drawImage(_videoEl, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
+
+  let symbols;
+  try {
+    symbols = await _scanFn(_procCtx.getImageData(0, 0, cropW, cropH));
+  } catch { return; }
+
+  if (!symbols?.length || !_scanning) {
+    // No read this frame — decay all counts so one missed frame doesn't reset
+    // a nearly-confirmed code (the ×1.8 height tolerance also helps here).
+    for (const k in _readCounts) {
+      _readCounts[k]--;
+      if (_readCounts[k] <= 0) delete _readCounts[k];
+    }
+    document.getElementById('scan-box')?.classList.remove('locking');
+    return;
+  }
+
+  // ZBar returns the raw decoded string; strip non-digit characters
+  // (some symbol types include a checksum character or prefix text).
+  const raw  = symbols[0].decode();
+  const code = raw.replace(/[^0-9X]/gi, '').toUpperCase();
+
+  if (!code || !isValidISBNCode(code)) {
+    document.getElementById('scan-box')?.classList.remove('locking');
+    return;
+  }
+
+  // Score this read — +2 per hit, capped at 5 to avoid slow drift
+  _readCounts[code] = Math.min((_readCounts[code] || 0) + 2, 5);
+
+  if (_readCounts[code] >= CONFIRM_SCORE && code !== lastScanned) {
+    lastScanned = code;
+    _readCounts = {};
+    _scanning   = false; // pause decode loop while lookup runs
+    cancelAnimationFrame(_rafId); _rafId = null;
+    document.getElementById('scan-box')?.classList.remove('locking');
+    flashScanBox();
+    handleScannedISBN(code);
+  } else {
+    // First hit — show a subtle "locking on" glow so the user knows to hold still
+    document.getElementById('scan-box')?.classList.add('locking');
+  }
+}
+
+// ── ISBN validation ───────────────────────────────────────────────────────────
+
 // Returns true only for codes with a valid EAN-13 or ISBN-10 check digit.
-// Rejects UPC misreads, truncated codes, and garbage digits from Quagga.
 function isValidISBNCode(isbn) {
   if (isbn.length === 13) {
-    // EAN-13 check digit: alternating ×1 and ×3 weights
     let sum = 0;
     for (let i = 0; i < 12; i++) sum += parseInt(isbn[i]) * (i % 2 === 0 ? 1 : 3);
     return (10 - (sum % 10)) % 10 === parseInt(isbn[12]);
   }
   if (isbn.length === 10) {
-    // ISBN-10 check digit: weights 10 down to 1
     let sum = 0;
     for (let i = 0; i < 9; i++) sum += parseInt(isbn[i]) * (10 - i);
     const check = isbn[9] === 'X' ? 10 : parseInt(isbn[9]);
     return (sum + check) % 11 === 0;
   }
-  return false; // reject 11-digit, 12-digit UPC misreads, etc.
+  return false;
 }
 
 function showScanFallback(msg) {
@@ -151,25 +243,17 @@ function showScanFallback(msg) {
   if (p) p.textContent = msg;
 }
 
-let flashTimer = null;
+let _flashTimer = null;
 function flashScanBox() {
   const box   = document.getElementById('scan-box');
   const flash = document.getElementById('scan-flash');
   if (box)   box.classList.add('detected');
   if (flash) flash.classList.add('show');
-  clearTimeout(flashTimer);
-  flashTimer = setTimeout(() => {
+  clearTimeout(_flashTimer);
+  _flashTimer = setTimeout(() => {
     if (box)   box.classList.remove('detected');
     if (flash) flash.classList.remove('show');
   }, 800);
-}
-
-function stopScanner() {
-  if (quaggaRunning) {
-    try { Quagga.stop(); } catch (_) {}
-    quaggaRunning = false;
-  }
-  lastScanned = null;
 }
 
 async function handleScannedISBN(isbn) {
@@ -821,16 +905,28 @@ async function searchByISBN(isbn) {
     const booksPromise  = fetchISBNFromBooksAPI(candidate).catch(() => null);
     const searchPromise = fetchISBNFromSearch(candidate).catch(() => null);
 
-    // Wait up to 8 s for both to settle — whichever resolves first doesn't
-    // block us from using the second one's richer fields.
-    // 8 s gives Open Library's Books API enough time to respond on slow requests
-    // (common for deluxe/collector's editions indexed only in older records).
-    const [booksBook, searchBook] = await Promise.all([
-      Promise.race([booksPromise,  sleep(8000).then(() => null)]),
-      Promise.race([searchPromise, sleep(8000).then(() => null)]),
+    // Fast-path: wait for whichever endpoint responds first (up to 8 s),
+    // then give the other endpoint up to 3 more seconds to arrive so we can
+    // merge the two responses. This avoids always waiting the full 8 s when
+    // one endpoint is fast and the other is slow or unreachable.
+    const winner = await Promise.race([
+      booksPromise.then(b  => b  && { src: 'books',  b  }).catch(() => null),
+      searchPromise.then(s => s  && { src: 'search', s  }).catch(() => null),
+      sleep(8000).then(() => ({ src: 'timeout' })),
     ]);
+    if (!winner || winner.src === 'timeout') continue;
 
-    if (!booksBook && !searchBook) continue; // neither endpoint found it
+    let booksBook, searchBook;
+    if (winner.src === 'books') {
+      booksBook  = winner.b;
+      searchBook = await Promise.race([searchPromise.catch(() => null), sleep(3000).then(() => null)]);
+    } else {
+      searchBook = winner.s;
+      booksBook  = await Promise.race([booksPromise.catch(() => null), sleep(3000).then(() => null)]);
+    }
+
+    // winner already guaranteed at least one is non-null
+    if (!booksBook && !searchBook) continue;
 
     let book;
     if (searchBook && booksBook) {
