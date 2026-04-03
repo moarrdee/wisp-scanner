@@ -25,7 +25,11 @@ class FetchError extends Error {
 
 // ── Tab switching ─────────────────────────────────────────────────────────────
 function switchTab(tab) {
-  clearSearch();
+  // Only clear search state when navigating away from the search tab.
+  // Clearing on every switch (including scan → search after a failed barcode)
+  // was wiping the search fields the user hadn't typed anything in yet, and
+  // aborting any in-flight search request unnecessarily.
+  if (currentTab === 'search' && tab !== 'search') clearSearch();
   currentTab = tab;
   document.querySelectorAll('.view:not(.modal)').forEach(v => v.classList.remove('active'));
   document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
@@ -126,9 +130,16 @@ function startScanner() {
       pendingISBN  = isbn;
       pendingCount = 1;
     }
-    if (pendingCount < 2) return;
+    if (pendingCount < 2) {
+      // First detection — show a subtle "locking on" glow so the user knows to
+      // hold steady.  Without this the screen has no reaction and the user moves
+      // the camera, which is what causes the visible jump.
+      document.getElementById('scan-box')?.classList.add('locking');
+      return;
+    }
 
     // Confirmed — reset and process
+    document.getElementById('scan-box')?.classList.remove('locking');
     pendingISBN  = null;
     pendingCount = 0;
 
@@ -186,7 +197,10 @@ function stopScanner() {
     try { Quagga.stop(); } catch (_) {}
     quaggaRunning = false;
   }
-  lastScanned = null;
+  lastScanned  = null;
+  pendingISBN  = null;
+  pendingCount = 0;
+  document.getElementById('scan-box')?.classList.remove('locking');
 }
 
 async function handleScannedISBN(isbn) {
@@ -311,7 +325,10 @@ function updateSearchBtn() {
   const hasInput = t || a || i;
   document.getElementById('search-btn').disabled = !hasInput;
   const clearBtn = document.getElementById('clear-btn');
-  clearBtn.classList.toggle('hidden', !hasInput && document.getElementById('search-results').innerHTML === '');
+  // Show the clear button when there's input OR when results are displayed.
+  // Using currentResults.length is reliable; innerHTML === '' was fragile
+  // because the placeholder HTML made it always non-empty.
+  clearBtn.classList.toggle('hidden', !hasInput && !currentResults.length);
 }
 
 function clearSearch() {
@@ -605,8 +622,14 @@ function toggleDesc() {
 }
 
 // ── Info modal ────────────────────────────────────────────────────────────────
+let _infoCached = false;
 function showInfo() {
-  document.getElementById('info-content').innerHTML = infoHTML();
+  // Build the info HTML once and inject it — it's static content so rebuilding
+  // on every open is wasteful and can cause a layout flash.
+  if (!_infoCached) {
+    document.getElementById('info-content').innerHTML = infoHTML();
+    _infoCached = true;
+  }
   document.getElementById('view-info').classList.remove('hidden');
 }
 function closeInfo() {
