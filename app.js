@@ -1088,13 +1088,30 @@ async function enrichSpecialEdition(book) {
               ?? candidates[0];
     if (!best) return book;
 
+    // Eagerly fetch the description from the best match's works endpoint.
+    // This populates age-rating and romance-detection signals immediately —
+    // without this, both run on near-empty subjects for deluxe/special editions.
+    // Raced against 6 s so it never blocks the lookup on a slow network.
+    const worksId = best.id?.startsWith('/works/') ? best.id
+                  : (book.id?.startsWith('/works/') ? book.id : null);
+    const description = worksId
+      ? await Promise.race([fetchDescription(worksId), sleep(6000).then(() => null)])
+      : null;
+
+    // Merge categories: deduplicate and combine both records so nothing is lost.
+    // The special-edition record may carry NYT tags; the main edition may carry
+    // genre/subject tags. Union of both gives the best signal for age/romance.
+    const mergedCategories = [
+      ...new Set([...(book.categories || []), ...(best.categories || [])])
+    ];
+
     return {
       ...book,
-      coverURL:   book.coverURL   ?? best.coverURL,
-      categories: book.categories.length > best.categories.length
-                    ? book.categories : best.categories,
-      pageCount:  book.pageCount  ?? best.pageCount,
-      // Use /works/ id from main edition to enable description lazy-fetch
+      coverURL:    book.coverURL  ?? best.coverURL,
+      categories:  mergedCategories,
+      pageCount:   book.pageCount ?? best.pageCount,
+      description: book.description ?? description,
+      // Use /works/ id from main edition so detail view can re-fetch description
       id: book.id.startsWith('/works/') ? book.id : (best.id ?? book.id),
     };
   } catch {
