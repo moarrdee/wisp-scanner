@@ -43,16 +43,8 @@ function switchTab(tab) {
 // Uses Quagga2 for EAN/UPC decoding via canvas — works on iOS Safari and all
 // mobile browsers. BarcodeDetector is NOT used (not available on iOS).
 
-let quaggaRunning  = false;
-let lastScanned    = null;
-// Scan confirmation: the same valid ISBN must be seen at least twice within a
-// 2-second window before it triggers a lookup.  Using a time window (not
-// consecutive frames) means occasional missed frames between reads don't reset
-// the counter — critical for difficult barcodes that Quagga decodes intermittently.
-let pendingISBN    = null;
-let pendingCount   = 0;
-let pendingExpiry  = 0;     // ms timestamp after which the pending state resets
-const CONFIRM_WINDOW_MS = 2000;  // window in which the second read must arrive
+let quaggaRunning = false;
+let lastScanned   = null;
 
 function startScanner() {
   const fallback = document.getElementById('scan-fallback');
@@ -60,7 +52,7 @@ function startScanner() {
 
   area.classList.remove('hidden');
   fallback.classList.add('hidden');
-  stopScanner(); // also resets pendingISBN/Count/Expiry and removes locking class
+  stopScanner();
 
   // Remove any video/canvas elements Quagga left from a previous session.
   // Without this, re-initialising injects new elements behind the stale ones,
@@ -72,19 +64,6 @@ function startScanner() {
     return;
   }
 
-  // Compute the scan box position as percentages of the scanner area so Quagga
-  // only decodes barcodes that are inside the visible box on screen.
-  // The scan box is 280×120px centered in #scanner-area (matches CSS).
-  // We measure the live element size so this works on every screen dimension.
-  const areaRect  = area.getBoundingClientRect();
-  const boxW = 280, boxH = 120;
-  // Add a small margin (12px each side) so a barcode touching the edge still reads.
-  const margin    = 12;
-  const leftPct   = Math.max(0, (areaRect.width  - boxW) / 2 - margin) / areaRect.width  * 100;
-  const topPct    = Math.max(0, (areaRect.height - boxH) / 2 - margin) / areaRect.height * 100;
-  const rightPct  = leftPct;
-  const bottomPct = topPct;
-
   Quagga.init({
     inputStream: {
       type: 'LiveStream',
@@ -94,25 +73,19 @@ function startScanner() {
         width:  { ideal: 1280 },
         height: { ideal: 720 },
       },
-      // Restrict decoding to the scan box region — barcodes outside the frame
-      // on screen will not trigger a read. Values are % from each edge.
-      area: {
-        top:    topPct.toFixed(1)    + '%',
-        right:  rightPct.toFixed(1)  + '%',
-        bottom: bottomPct.toFixed(1) + '%',
-        left:   leftPct.toFixed(1)   + '%',
-      },
       // Quagga draws its own canvas overlay — we don't need it
       willReadFrequently: true,
     },
     locator: {
-      // patchSize 'medium' works well for typical book barcode sizes.
-      // halfSample is intentionally OFF — halving the image trades resolution for
-      // speed, but difficult barcodes (fine print, worn labels) need full resolution
-      // to decode at all. The performance hit on modern phones is negligible.
+      // halfSample halves the image before processing — faster per frame on the
+      // single-threaded iOS path (numOfWorkers: 0 required on iOS).
+      // patchSize 'medium' balances detection range vs. barcode size accuracy.
       patchSize: 'medium',
-      halfSample: false,
+      halfSample: true,
     },
+    // 10 fps gives the single-threaded decoder more time per frame without
+    // starving the camera feed.
+    frequency: 10,
     decoder: {
       readers: ['ean_reader', 'ean_8_reader', 'upc_reader', 'upc_e_reader'],
       multiple: false,
@@ -140,30 +113,6 @@ function startScanner() {
     // Validate the check digit and reject bad reads — keep scanning until we get
     // a valid EAN-13 (13 digits) or ISBN-10 (10 digits).
     if (!isValidISBNCode(isbn)) return;
-
-    // Confirmation: require the same valid ISBN to appear at least twice within
-    // a 2-second window before triggering a lookup.  Using a time window means
-    // missed frames between reads don't reset progress — if Quagga decodes on
-    // frame 1, misses frames 2–5, then decodes again on frame 6, it still confirms.
-    const now = Date.now();
-    if (isbn === pendingISBN && now < pendingExpiry) {
-      pendingCount++;
-    } else {
-      // New barcode or window expired — start fresh
-      pendingISBN   = isbn;
-      pendingCount  = 1;
-      pendingExpiry = now + CONFIRM_WINDOW_MS;
-      // First detection: dim glow tells the user "I can see it, hold steady"
-      document.getElementById('scan-box')?.classList.add('locking');
-      return;
-    }
-    if (pendingCount < 2) return;  // still waiting for second read within window
-
-    // Confirmed — clean up and process
-    document.getElementById('scan-box')?.classList.remove('locking');
-    pendingISBN  = null;
-    pendingCount = 0;
-    pendingExpiry = 0;
 
     if (isbn !== lastScanned) {
       lastScanned = isbn;
@@ -219,11 +168,7 @@ function stopScanner() {
     try { Quagga.stop(); } catch (_) {}
     quaggaRunning = false;
   }
-  lastScanned   = null;
-  pendingISBN   = null;
-  pendingCount  = 0;
-  pendingExpiry = 0;
-  document.getElementById('scan-box')?.classList.remove('locking');
+  lastScanned = null;
 }
 
 async function handleScannedISBN(isbn) {
