@@ -17,6 +17,7 @@ const isbnCache  = {};
 let currentTab       = 'scan';
 let searchPending    = null;   // AbortController for in-flight search
 let currentDetailId  = null;   // tracks which book's detail is open (prevents stale desc race)
+let activeLookupId   = 0;      // incremented on every new ISBN lookup; stale async results check this
 
 // ── Custom error to distinguish deliberate throws from network failures ────────
 class FetchError extends Error {
@@ -172,6 +173,10 @@ function stopScanner() {
 }
 
 async function handleScannedISBN(isbn) {
+  // Capture this lookup's ID. If the user retries or navigates away before we
+  // finish, activeLookupId will have been incremented and our result is discarded.
+  const lookupId = ++activeLookupId;
+
   stopScanner(); // pause scanning while we look up the book
 
   const resultEl = document.getElementById('scan-result');
@@ -188,9 +193,11 @@ async function handleScannedISBN(isbn) {
 
   try {
     const books = await searchByISBN(isbn);
+    if (activeLookupId !== lookupId) return; // user moved on — discard stale result
     resultEl.classList.add('hidden');
     if (books.length > 0) openDetail(books[0]);
   } catch (e) {
+    if (activeLookupId !== lookupId) return; // user moved on — discard stale error
     // Distinguish a genuine "not found" from a network/server error
     const isNetworkError = e.name === 'FetchError' &&
       (e.message.includes('Network') || e.message.includes('respond') || e.message.includes('Server'));
@@ -214,11 +221,13 @@ async function handleScannedISBN(isbn) {
 }
 
 function scanGoToSearch() {
+  activeLookupId++; // cancel any in-flight lookup
   document.getElementById('scan-result').classList.add('hidden');
   switchTab('search');
 }
 
 function scanRetry() {
+  activeLookupId++; // cancel any in-flight lookup
   document.getElementById('scan-result').classList.add('hidden');
   startScanner();
 }
@@ -807,16 +816,18 @@ async function searchByISBN(isbn) {
   //   - Books API:    may lack a works key but carries pagination/page count,
   //                   publisher, and cover when the search index doesn't
   // Racing alone would mean the slower endpoint's data is discarded. By waiting
-  // for both (up to 4 s), we get the richest possible record every time.
+  // for both (up to 8 s), we get the richest possible record every time.
   for (const candidate of candidates) {
     const booksPromise  = fetchISBNFromBooksAPI(candidate).catch(() => null);
     const searchPromise = fetchISBNFromSearch(candidate).catch(() => null);
 
-    // Wait up to 4 s for both to settle — whichever resolves first doesn't
+    // Wait up to 8 s for both to settle — whichever resolves first doesn't
     // block us from using the second one's richer fields.
+    // 8 s gives Open Library's Books API enough time to respond on slow requests
+    // (common for deluxe/collector's editions indexed only in older records).
     const [booksBook, searchBook] = await Promise.all([
-      Promise.race([booksPromise,  sleep(4000).then(() => null)]),
-      Promise.race([searchPromise, sleep(4000).then(() => null)]),
+      Promise.race([booksPromise,  sleep(8000).then(() => null)]),
+      Promise.race([searchPromise, sleep(8000).then(() => null)]),
     ]);
 
     if (!booksBook && !searchBook) continue; // neither endpoint found it
@@ -836,6 +847,12 @@ async function searchByISBN(isbn) {
     } else {
       book = searchBook ?? booksBook;
     }
+
+    // Special-edition enrichment: if the title contains edition qualifiers
+    // (Deluxe, Collector's, Special Edition, etc.) and the record is missing a
+    // cover or has sparse categories, search for the base title to fill gaps.
+    // We keep the original title, id, and ISBN so catalogue links stay correct.
+    book = await enrichSpecialEdition(book);
 
     isbnCache[isbn] = isbnCache[candidate] = book;
     return [book];
@@ -896,6 +913,78 @@ async function fetchISBNFromSearch(candidate) {
       if (attempt < 3) { await sleep(attempt * 600); continue; }
       throw e;
     }
+  }
+}
+
+// Special-edition enrichment ──────────────────────────────────────────────────
+// Terms that appear in special/deluxe/collector's edition titles but not the
+// main edition. We strip these to derive the base title for a fallback search.
+const EDITION_TERMS = [
+  'deluxe edition', 'deluxe', "collector's edition", 'collectors edition',
+  'special edition', 'limited edition', 'anniversary edition',
+  'expanded edition', 'illustrated edition', 'signed edition',
+  'exclusive edition', 'trade paperback edition', 'hardcover edition',
+  'special collector', "collector's", 'collectors',
+];
+
+// Returns a (possibly enriched) copy of book. If the title contains edition
+// qualifiers AND the record is missing a cover or has very sparse categories,
+// we search Open Library for the base title + first author and merge in the
+// cover URL, subjects, page count, and /works/ id from the best matching result.
+async function enrichSpecialEdition(book) {
+  const lc = book.title.toLowerCase();
+  const hasEditionTerm = EDITION_TERMS.some(t => lc.includes(t));
+  if (!hasEditionTerm) return book;
+
+  // Only enrich if something useful is missing — avoids unnecessary API calls
+  if (book.coverURL && book.categories.length > 5) return book;
+
+  // Strip edition qualifiers (longest first so "collector's edition" beats "edition")
+  const sorted = [...EDITION_TERMS].sort((a, b) => b.length - a.length);
+  let baseTitle = book.title.toLowerCase();
+  for (const term of sorted) baseTitle = baseTitle.replace(term, '');
+  // Restore original casing of the remaining words
+  const baseTitleWords = new Set(baseTitle.trim().split(/\s+/).filter(Boolean));
+  const originalWords  = book.title.split(/\s+/);
+  baseTitle = originalWords.filter(w => baseTitleWords.has(w.toLowerCase())).join(' ');
+  // Drop trailing colons, commas, dashes left behind after stripping
+  baseTitle = baseTitle.replace(/[\s:,\-–—]+$/, '').trim();
+
+  if (!baseTitle || baseTitle.toLowerCase() === book.title.toLowerCase().trim()) return book;
+
+  const author = book.authors?.[0] ?? '';
+  try {
+    const params = new URLSearchParams({ title: baseTitle, fields: SEARCH_FIELDS, limit: '5' });
+    if (author) params.set('author', author);
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8000);
+    const res = await fetch(`${SEARCH_BASE}?${params}`, { signal: controller.signal });
+    clearTimeout(timer);
+    if (!res.ok) return book;
+
+    const json  = await res.json();
+    const found = (json.docs || []).map(bookFromDoc).filter(Boolean);
+
+    // Prefer a result that has both a cover and a /works/ id; fall back to just a cover.
+    const best = found.find(b => b.coverURL && b.id?.startsWith('/works/'))
+              ?? found.find(b => b.coverURL)
+              ?? found[0];
+    if (!best) return book;
+
+    return {
+      ...book,
+      // Fill gaps from the main edition; never overwrite data the special edition already has
+      coverURL:   book.coverURL   ?? best.coverURL,
+      categories: book.categories.length >= best.categories.length
+                    ? book.categories : best.categories,
+      pageCount:  book.pageCount  ?? best.pageCount,
+      // Use the /works/ id from the main edition when the special-edition record lacks one
+      // (a /works/ id enables the lazy description fetch in the detail view)
+      id: book.id.startsWith('/works/') ? book.id : (best.id ?? book.id),
+    };
+  } catch {
+    return book; // enrichment is best-effort — never fail the main lookup
   }
 }
 
