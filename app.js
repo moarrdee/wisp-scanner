@@ -578,9 +578,12 @@ function openDetail(book) {
   const baseAge     = ageRating(book);
   const baseRomance = hasRomanticThemes(book);
 
-  // Lazy-load description
-  if (book.id && book.id.startsWith('/works/')) {
-    fetchDescription(book.id).then(desc => {
+  // Lazy-load description. Prefer descWorksId (set by enrichSpecialEdition to
+  // the main-edition works key) so enriched books don't re-fetch from the sparse
+  // deluxe-edition record; fall back to book.id for non-enriched books.
+  const descKey = book.descWorksId ?? book.id;
+  if (descKey && descKey.startsWith('/works/')) {
+    fetchDescription(descKey).then(desc => {
       // Guard: if user has already navigated to a different book, discard result
       if (book.id !== currentDetailId) return;
       if (!desc) return;
@@ -665,6 +668,14 @@ function detailHTML(book) {
       <span class="rating-sub">Romantic themes</span>
     </div>` : '';
 
+  // Pre-populate description if already available (e.g. fetched during enrichment).
+  // The description section starts visible when content exists; the lazy-load in
+  // openDetail will update it later if a richer version is found via /works/ id.
+  const preDesc       = book.description || '';
+  const preDescTrunc  = preDesc.length > 400 ? preDesc.slice(0, 400) + '\u2026' : preDesc;
+  const descHidden    = preDesc ? '' : 'hidden';
+  const toggleHidden  = !preDesc || preDesc.length <= 400 ? 'style="display:none"' : '';
+
   return `
     <div class="detail-header">
       <div class="detail-cover-wrap">${cover}</div>
@@ -684,14 +695,15 @@ function detailHTML(book) {
         </div>
         ${romanceCard}
       </div>
-      <div id="detail-desc-section" class="${book.id?.startsWith('/works/') ? 'hidden' : 'hidden'}">
+      <div id="detail-desc-section" class="${descHidden}">
         <div class="section-label">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="21" y1="10" x2="3" y2="10"/><line x1="21" y1="6" x2="3" y2="6"/><line x1="21" y1="14" x2="3" y2="14"/><line x1="21" y1="18" x2="3" y2="18"/></svg>
           Description
         </div>
-        <p class="detail-description" id="detail-desc-text"></p>
+        <p class="detail-description" id="detail-desc-text"
+           data-full="${escHtml(preDesc)}">${escHtml(preDescTrunc)}</p>
         <button class="read-more-btn" id="detail-desc-toggle"
-          onclick="toggleDesc()">Read more</button>
+          onclick="toggleDesc()" ${toggleHidden}>Read more</button>
       </div>
       ${rowsHTML ? `
         <div>
@@ -1152,12 +1164,14 @@ async function enrichSpecialEdition(book) {
 
     return {
       ...book,
-      coverURL:    book.coverURL  ?? best.coverURL,
-      categories:  mergedCategories,
-      pageCount:   book.pageCount ?? best.pageCount,
-      description: book.description ?? description,
-      // Use /works/ id from main edition so detail view can re-fetch description
-      id: book.id.startsWith('/works/') ? book.id : (best.id ?? book.id),
+      coverURL:      book.coverURL  ?? best.coverURL,
+      categories:    mergedCategories,
+      pageCount:     book.pageCount ?? best.pageCount,
+      description:   book.description ?? description,
+      id:            book.id.startsWith('/works/') ? book.id : (best.id ?? book.id),
+      // Store the works id used to fetch the description so the detail view
+      // can re-fetch from the same richer endpoint (not the sparse deluxe record).
+      descWorksId:   worksId,
     };
   } catch {
     return book; // enrichment is always best-effort
