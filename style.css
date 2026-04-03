@@ -191,6 +191,12 @@ img.nav-logo {
 #scan-box.detected {
   box-shadow: 0 0 0 3px var(--gold);
 }
+/* First-frame "locking on" state — dim glow signals hold-steady without
+   the jarring full flash that would trigger camera movement. */
+#scan-box.locking {
+  box-shadow: 0 0 0 2px rgba(155, 128, 74, 0.45);
+  transition: box-shadow 0.1s;
+}
 #scan-box .corner {
   position: absolute;
   width: 24px; height: 24px;
