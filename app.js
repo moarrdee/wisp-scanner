@@ -45,11 +45,14 @@ function switchTab(tab) {
 
 let quaggaRunning  = false;
 let lastScanned    = null;
-// Scan confirmation state — the same valid ISBN must decode twice in a row
-// before we treat it as a confirmed read.  This filters single-frame noise
-// without adding perceptible delay (one extra frame ≈ 100 ms at 10 fps).
+// Scan confirmation: the same valid ISBN must be seen at least twice within a
+// 2-second window before it triggers a lookup.  Using a time window (not
+// consecutive frames) means occasional missed frames between reads don't reset
+// the counter — critical for difficult barcodes that Quagga decodes intermittently.
 let pendingISBN    = null;
 let pendingCount   = 0;
+let pendingExpiry  = 0;     // ms timestamp after which the pending state resets
+const CONFIRM_WINDOW_MS = 2000;  // window in which the second read must arrive
 
 function startScanner() {
   const fallback = document.getElementById('scan-fallback');
@@ -57,9 +60,7 @@ function startScanner() {
 
   area.classList.remove('hidden');
   fallback.classList.add('hidden');
-  stopScanner();
-  pendingISBN  = null;
-  pendingCount = 0;
+  stopScanner(); // also resets pendingISBN/Count/Expiry and removes locking class
 
   // Remove any video/canvas elements Quagga left from a previous session.
   // Without this, re-initialising injects new elements behind the stale ones,
@@ -84,15 +85,13 @@ function startScanner() {
       willReadFrequently: true,
     },
     locator: {
-      // halfSample halves the image before processing — dramatically speeds up
-      // single-threaded decode (required since numOfWorkers: 0 on iOS).
-      // patchSize 'medium' balances detection range vs. close-up barcode accuracy.
+      // patchSize 'medium' works well for typical book barcode sizes.
+      // halfSample is intentionally OFF — halving the image trades resolution for
+      // speed, but difficult barcodes (fine print, worn labels) need full resolution
+      // to decode at all. The performance hit on modern phones is negligible.
       patchSize: 'medium',
-      halfSample: true,
+      halfSample: false,
     },
-    // Process at most 10 frames/sec — gives the JS engine more time per frame
-    // to locate and decode difficult barcodes without dropping frames entirely.
-    frequency: 10,
     decoder: {
       readers: ['ean_reader', 'ean_8_reader', 'upc_reader', 'upc_e_reader'],
       multiple: false,
@@ -121,27 +120,29 @@ function startScanner() {
     // a valid EAN-13 (13 digits) or ISBN-10 (10 digits).
     if (!isValidISBNCode(isbn)) return;
 
-    // Confirmation: require the same valid ISBN to appear in 2 consecutive frames
-    // before treating it as a confirmed read.  A single stray frame that somehow
-    // passes the check-digit test can no longer trigger an incorrect lookup.
-    if (isbn === pendingISBN) {
+    // Confirmation: require the same valid ISBN to appear at least twice within
+    // a 2-second window before triggering a lookup.  Using a time window means
+    // missed frames between reads don't reset progress — if Quagga decodes on
+    // frame 1, misses frames 2–5, then decodes again on frame 6, it still confirms.
+    const now = Date.now();
+    if (isbn === pendingISBN && now < pendingExpiry) {
       pendingCount++;
     } else {
-      pendingISBN  = isbn;
-      pendingCount = 1;
-    }
-    if (pendingCount < 2) {
-      // First detection — show a subtle "locking on" glow so the user knows to
-      // hold steady.  Without this the screen has no reaction and the user moves
-      // the camera, which is what causes the visible jump.
+      // New barcode or window expired — start fresh
+      pendingISBN   = isbn;
+      pendingCount  = 1;
+      pendingExpiry = now + CONFIRM_WINDOW_MS;
+      // First detection: dim glow tells the user "I can see it, hold steady"
       document.getElementById('scan-box')?.classList.add('locking');
       return;
     }
+    if (pendingCount < 2) return;  // still waiting for second read within window
 
-    // Confirmed — reset and process
+    // Confirmed — clean up and process
     document.getElementById('scan-box')?.classList.remove('locking');
     pendingISBN  = null;
     pendingCount = 0;
+    pendingExpiry = 0;
 
     if (isbn !== lastScanned) {
       lastScanned = isbn;
@@ -197,9 +198,10 @@ function stopScanner() {
     try { Quagga.stop(); } catch (_) {}
     quaggaRunning = false;
   }
-  lastScanned  = null;
-  pendingISBN  = null;
-  pendingCount = 0;
+  lastScanned   = null;
+  pendingISBN   = null;
+  pendingCount  = 0;
+  pendingExpiry = 0;
   document.getElementById('scan-box')?.classList.remove('locking');
 }
 
