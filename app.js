@@ -72,6 +72,19 @@ function startScanner() {
     return;
   }
 
+  // Compute the scan box position as percentages of the scanner area so Quagga
+  // only decodes barcodes that are inside the visible box on screen.
+  // The scan box is 280×120px centered in #scanner-area (matches CSS).
+  // We measure the live element size so this works on every screen dimension.
+  const areaRect  = area.getBoundingClientRect();
+  const boxW = 280, boxH = 120;
+  // Add a small margin (12px each side) so a barcode touching the edge still reads.
+  const margin    = 12;
+  const leftPct   = Math.max(0, (areaRect.width  - boxW) / 2 - margin) / areaRect.width  * 100;
+  const topPct    = Math.max(0, (areaRect.height - boxH) / 2 - margin) / areaRect.height * 100;
+  const rightPct  = leftPct;
+  const bottomPct = topPct;
+
   Quagga.init({
     inputStream: {
       type: 'LiveStream',
@@ -80,6 +93,14 @@ function startScanner() {
         facingMode: 'environment',
         width:  { ideal: 1280 },
         height: { ideal: 720 },
+      },
+      // Restrict decoding to the scan box region — barcodes outside the frame
+      // on screen will not trigger a read. Values are % from each edge.
+      area: {
+        top:    topPct.toFixed(1)    + '%',
+        right:  rightPct.toFixed(1)  + '%',
+        bottom: bottomPct.toFixed(1) + '%',
+        left:   leftPct.toFixed(1)   + '%',
       },
       // Quagga draws its own canvas overlay — we don't need it
       willReadFrequently: true,
