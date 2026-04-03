@@ -617,6 +617,29 @@ img.nav-logo {
   margin-top: 6px;
 }
 
+/* Persistent "Type ISBN" button in scanner area.
+   z-index 3 puts it above the camera overlay (z-index 2) but below the
+   scan-result card (z-index 10) so it's hidden during searching/not-found states. */
+.manual-isbn-btn {
+  position: absolute;
+  bottom: 22px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 3;
+  background: rgba(0, 0, 0, 0.62);
+  border: 1px solid rgba(155, 128, 74, 0.45);
+  border-radius: 20px;
+  color: var(--cream);
+  opacity: 0.82;
+  font-size: 12px;
+  padding: 8px 20px;
+  cursor: pointer;
+  white-space: nowrap;
+  -webkit-tap-highlight-color: transparent;
+  transition: opacity 0.15s;
+}
+.manual-isbn-btn:active { opacity: 0.55; }
+
 /* ── Utilities ────────────────────────────────────────── */
 .hidden { display: none !important; }
 .spinner {
