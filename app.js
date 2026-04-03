@@ -352,14 +352,32 @@ function showManualISBN() {
   setTimeout(() => document.getElementById('manual-isbn-input')?.focus(), 60);
 }
 
+function isValidISBN(digits) {
+  if (digits.length === 10) {
+    let sum = 0;
+    for (let i = 0; i < 9; i++) sum += parseInt(digits[i], 10) * (10 - i);
+    const check = (11 - (sum % 11)) % 11;
+    const last  = digits[9] === 'X' ? 10 : parseInt(digits[9], 10);
+    return check === last;
+  }
+  if (digits.length === 13) {
+    if (!/^\d{13}$/.test(digits)) return false;
+    let sum = 0;
+    for (let i = 0; i < 12; i++) sum += parseInt(digits[i], 10) * (i % 2 === 0 ? 1 : 3);
+    const check = (10 - (sum % 10)) % 10;
+    return check === parseInt(digits[12], 10);
+  }
+  return false;
+}
+
 function submitManualISBN() {
   const input = document.getElementById('manual-isbn-input');
   if (!input) return;
   // Strip hyphens, spaces, and any non-digit except trailing X for ISBN-10
-  const raw  = input.value.trim();
-  const isbn = raw.replace(/[-\s]/g, '').toUpperCase();
+  const raw    = input.value.trim();
+  const isbn   = raw.replace(/[-\s]/g, '').toUpperCase();
   const digits = isbn.replace(/[^0-9X]/g, '');
-  if (digits.length < 10) {
+  if (!isValidISBN(digits)) {
     input.style.borderColor = '#F54236';
     input.focus();
     return;
@@ -427,8 +445,10 @@ async function performSearch() {
 
   if (!t && !a && !isbn) return;
 
-  // Cancel any in-flight request
-  if (searchPending) { searchPending.abort(); searchPending = null; }
+  // Cancel any in-flight request and create a new one
+  if (searchPending) searchPending.abort();
+  const controller = new AbortController();
+  searchPending = controller;
 
   // Dismiss keyboard
   document.activeElement?.blur();
@@ -438,9 +458,9 @@ async function performSearch() {
   try {
     let books;
     if (isbn) {
-      books = await searchByISBN(isbn);
+      books = await searchByISBN(isbn, controller.signal);
     } else {
-      books = await searchByQuery(t, a);
+      books = await searchByQuery(t, a, controller.signal);
     }
     books = await enrichWithDescriptions(books);
     renderResults(books);
@@ -448,6 +468,7 @@ async function performSearch() {
     if (e.name === 'AbortError') return;
     renderError(e.message || 'Something went wrong.');
   } finally {
+    if (searchPending === controller) searchPending = null;
     setSearchLoading(false);
   }
 }
@@ -503,11 +524,13 @@ function renderResults(books) {
   // Background: enrich any special editions so their age/romance badges reflect
   // the richer description and categories from the canonical edition.
   // Runs after the initial render so it never delays showing results.
+  const snapshotResults = books;
   books.forEach((book, i) => {
     const lc = book.title.toLowerCase();
     if (!EDITION_WORD_RE.test(lc) || !lc.includes('edition') || book.description) return;
     enrichSpecialEdition(book).then(enriched => {
       if (enriched === book) return; // nothing changed
+      if (currentResults !== snapshotResults) return; // new search has started — don't corrupt it
       currentResults[i] = enriched; // update so detail view gets richer data on tap
       // Patch the badge row in the already-rendered card
       const card = document.querySelector(`[data-card-idx="${i}"]`);
@@ -956,18 +979,20 @@ const BOOKS_BASE   = 'https://openlibrary.org/api/books';
 const WORKS_BASE   = 'https://openlibrary.org';
 const SEARCH_FIELDS = 'key,title,author_name,subject,cover_i,number_of_pages_median,first_publish_year,publisher';
 
-async function fetchWithRetry(url, maxAttempts = 3) {
+async function fetchWithRetry(url, maxAttempts = 3, signal = null) {
   let attempt = 0;
   while (true) {
     attempt++;
+    if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
     let timedOut = false;
+    const controller = new AbortController();
+    const onAbort = () => controller.abort();
+    signal?.addEventListener('abort', onAbort, { once: true });
+    const timer = setTimeout(() => { timedOut = true; controller.abort(); }, 15000);
     try {
-      const controller = new AbortController();
-      searchPending = controller;
-      const timer = setTimeout(() => { timedOut = true; controller.abort(); }, 15000);
       const res = await fetch(url, { signal: controller.signal });
       clearTimeout(timer);
-      searchPending = null;
+      signal?.removeEventListener('abort', onAbort);
       if (res.ok) return res;
       if ((res.status === 500 || res.status === 503 || res.status === 429) && attempt < maxAttempts) {
         await sleep(attempt * 600);
@@ -975,6 +1000,8 @@ async function fetchWithRetry(url, maxAttempts = 3) {
       }
       throw new FetchError(`Server error (HTTP ${res.status}). Please try again.`);
     } catch (e) {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
       // Re-throw errors we threw deliberately — don't retry or re-wrap them
       if (e.name === 'FetchError') throw e;
       // AbortError: either user-cancelled (silent) or timed out (show message)
@@ -988,7 +1015,7 @@ async function fetchWithRetry(url, maxAttempts = 3) {
   }
 }
 
-async function searchByISBN(isbn) {
+async function searchByISBN(isbn, signal = null) {
   if (isbnCache[isbn]) return [isbnCache[isbn]];
 
   const candidates = buildISBNCandidates(isbn);
@@ -1007,8 +1034,8 @@ async function searchByISBN(isbn) {
   // Racing alone would mean the slower endpoint's data is discarded. By waiting
   // for both (up to 8 s), we get the richest possible record every time.
   for (const candidate of candidates) {
-    const booksPromise  = fetchISBNFromBooksAPI(candidate).catch(() => null);
-    const searchPromise = fetchISBNFromSearch(candidate).catch(() => null);
+    const booksPromise  = fetchISBNFromBooksAPI(candidate, signal).catch(() => null);
+    const searchPromise = fetchISBNFromSearch(candidate, signal).catch(() => null);
 
     // Fast-path: wait for whichever endpoint responds first (up to 8 s),
     // then give the other endpoint up to 3 more seconds to arrive so we can
@@ -1063,14 +1090,18 @@ async function searchByISBN(isbn) {
 }
 
 // Fetch one ISBN from the Books API with retries — throws if not found.
-async function fetchISBNFromBooksAPI(candidate) {
+async function fetchISBNFromBooksAPI(candidate, signal = null) {
   const url = `${BOOKS_BASE}?bibkeys=ISBN:${candidate}&format=json&jscmd=data`;
   for (let attempt = 1; attempt <= 3; attempt++) {
+    if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
     const controller = new AbortController();
+    const onAbort = () => controller.abort();
+    signal?.addEventListener('abort', onAbort, { once: true });
     const timer = setTimeout(() => controller.abort(), 15000);
     try {
       const res = await fetch(url, { signal: controller.signal });
       clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
       if (res.status === 503 || res.status === 429 || res.status === 500) {
         if (attempt < 3) { await sleep(attempt * 600); continue; }
         throw new Error('server error');
@@ -1082,6 +1113,8 @@ async function fetchISBNFromBooksAPI(candidate) {
       return bookFromBooksAPI(val, candidate);
     } catch (e) {
       clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
+      if (e.name === 'AbortError') throw e;             // user cancelled — don't retry
       if (e.message === 'not found') throw e;           // definitive miss — don't retry
       if (attempt < 3) { await sleep(attempt * 600); continue; }
       throw e;
@@ -1090,15 +1123,19 @@ async function fetchISBNFromBooksAPI(candidate) {
 }
 
 // Fetch one ISBN from the search index with retries — throws if not found.
-async function fetchISBNFromSearch(candidate) {
+async function fetchISBNFromSearch(candidate, signal = null) {
   const params = new URLSearchParams({ isbn: candidate, fields: SEARCH_FIELDS, limit: '1' });
   const url = `${SEARCH_BASE}?${params}`;
   for (let attempt = 1; attempt <= 3; attempt++) {
+    if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
     const controller = new AbortController();
+    const onAbort = () => controller.abort();
+    signal?.addEventListener('abort', onAbort, { once: true });
     const timer = setTimeout(() => controller.abort(), 15000);
     try {
       const res = await fetch(url, { signal: controller.signal });
       clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
       if (res.status === 503 || res.status === 429 || res.status === 500) {
         if (attempt < 3) { await sleep(attempt * 600); continue; }
         throw new Error('server error');
@@ -1110,6 +1147,8 @@ async function fetchISBNFromSearch(candidate) {
       return books[0];
     } catch (e) {
       clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
+      if (e.name === 'AbortError') throw e;             // user cancelled — don't retry
       if (e.message === 'not found') throw e;
       if (attempt < 3) { await sleep(attempt * 600); continue; }
       throw e;
@@ -1268,7 +1307,7 @@ async function enrichWithDescriptions(books) {
   }));
 }
 
-async function searchByQuery(title, author) {
+async function searchByQuery(title, author, signal = null) {
   const params = new URLSearchParams();
   if (title && author) { params.set('title', title); params.set('author', author); }
   else if (author)     { params.set('q', author); }
@@ -1287,7 +1326,7 @@ async function searchByQuery(title, author) {
     const authorKey = authorParams.toString();
     if (queryCache[authorKey]) return queryCache[authorKey];
     try {
-      const res  = await fetchWithRetry(`${SEARCH_BASE}?${authorParams}`);
+      const res  = await fetchWithRetry(`${SEARCH_BASE}?${authorParams}`, 3, signal);
       const json = await res.json();
       const books = (json.docs || []).map(bookFromDoc).filter(Boolean);
       if (books.length) {
@@ -1297,7 +1336,7 @@ async function searchByQuery(title, author) {
     } catch (_) { /* fall through to q= */ }
   }
 
-  const res  = await fetchWithRetry(`${SEARCH_BASE}?${params}`);
+  const res  = await fetchWithRetry(`${SEARCH_BASE}?${params}`, 3, signal);
   const json = await res.json();
   let books = (json.docs || []).map(bookFromDoc).filter(Boolean);
 
@@ -1311,7 +1350,7 @@ async function searchByQuery(title, author) {
     if (altTitle) {
       const altParams = new URLSearchParams({ q: altTitle, fields: SEARCH_FIELDS, limit: '10' });
       try {
-        const altRes  = await fetchWithRetry(`${SEARCH_BASE}?${altParams}`);
+        const altRes  = await fetchWithRetry(`${SEARCH_BASE}?${altParams}`, 3, signal);
         const altJson = await altRes.json();
         books = (altJson.docs || []).map(bookFromDoc).filter(Boolean);
       } catch (_) {}
