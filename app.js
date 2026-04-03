@@ -77,15 +77,15 @@ function startScanner() {
       willReadFrequently: true,
     },
     locator: {
-      // halfSample halves the image before processing — faster per frame on the
-      // single-threaded iOS path (numOfWorkers: 0 required on iOS).
-      // patchSize 'medium' balances detection range vs. barcode size accuracy.
+      // halfSample: true halves the image before processing — fast enough per frame
+      // on the single-threaded iOS path (numOfWorkers: 0) while still covering the
+      // full frame. patchSize 'medium' is the right balance for book barcodes.
       patchSize: 'medium',
       halfSample: true,
     },
-    // 10 fps gives the single-threaded decoder more time per frame without
-    // starving the camera feed.
-    frequency: 10,
+    // No frequency cap — let Quagga process as many frames as the device allows.
+    // Difficult barcodes (foil covers, low contrast) may only decode on a small
+    // fraction of frames; more attempts per second means faster confirmed reads.
     decoder: {
       readers: ['ean_reader', 'ean_8_reader', 'upc_reader', 'upc_e_reader'],
       multiple: false,
@@ -800,38 +800,41 @@ async function searchByISBN(isbn) {
     if (isbnCache[c]) { isbnCache[isbn] = isbnCache[c]; return [isbnCache[c]]; }
   }
 
-  // For each candidate, race Books API vs Search index simultaneously.
-  // These are different endpoints so firing both at once doesn't risk rate-limiting.
-  // We try each candidate in order (primary ISBN first, then variants) and stop
-  // at the first hit — no parallel same-endpoint blasting that would trigger 429s.
+  // For each candidate ISBN, fire both endpoints simultaneously and wait for both
+  // to settle (or timeout). We then merge the best fields from each:
+  //   - Search index: always returns a /works/ key (enables description fetch)
+  //                   but may lack page count (number_of_pages_median missing)
+  //   - Books API:    may lack a works key but carries pagination/page count,
+  //                   publisher, and cover when the search index doesn't
+  // Racing alone would mean the slower endpoint's data is discarded. By waiting
+  // for both (up to 4 s), we get the richest possible record every time.
   for (const candidate of candidates) {
-    // Both requests fire immediately — they run in parallel.
-    const booksPromise  = fetchISBNFromBooksAPI(candidate);
-    const searchPromise = fetchISBNFromSearch(candidate);
+    const booksPromise  = fetchISBNFromBooksAPI(candidate).catch(() => null);
+    const searchPromise = fetchISBNFromSearch(candidate).catch(() => null);
 
-    const winner = await Promise.any([booksPromise, searchPromise]).catch(() => null);
-    if (!winner) continue;
+    // Wait up to 4 s for both to settle — whichever resolves first doesn't
+    // block us from using the second one's richer fields.
+    const [booksBook, searchBook] = await Promise.all([
+      Promise.race([booksPromise,  sleep(4000).then(() => null)]),
+      Promise.race([searchPromise, sleep(4000).then(() => null)]),
+    ]);
 
-    let book = winner;
+    if (!booksBook && !searchBook) continue; // neither endpoint found it
 
-    // The search index returns a /works/ key which enables description fetching and
-    // carries richer subject tags. The Books API sometimes wins the race but returns
-    // only an /isbn/ key (no works link). When that happens, wait briefly for the
-    // already-in-flight search request to arrive and use it for the richer metadata.
-    if (!winner.id.startsWith('/works/')) {
-      const searchBook = await Promise.race([
-        searchPromise.catch(() => null),
-        sleep(2500).then(() => null),
-      ]);
-      if (searchBook?.id?.startsWith('/works/')) {
-        // Merge: keep works key from search; fill cover/pages/publisher from whichever has them.
-        book = {
-          ...searchBook,
-          coverURL:  searchBook.coverURL  ?? winner.coverURL,
-          pageCount: searchBook.pageCount ?? winner.pageCount,
-          publisher: searchBook.publisher ?? winner.publisher,
-        };
-      }
+    let book;
+    if (searchBook && booksBook) {
+      // Both found — merge: prefer /works/ id and search subjects; fill blanks from Books API
+      book = {
+        ...searchBook,
+        id:        searchBook.id.startsWith('/works/') ? searchBook.id : (booksBook.id ?? searchBook.id),
+        coverURL:  searchBook.coverURL  ?? booksBook.coverURL,
+        pageCount: searchBook.pageCount ?? booksBook.pageCount,
+        publisher: searchBook.publisher ?? booksBook.publisher,
+        // Books API subjects are richer objects — only use them if search came back empty
+        categories: searchBook.categories.length ? searchBook.categories : booksBook.categories,
+      };
+    } else {
+      book = searchBook ?? booksBook;
     }
 
     isbnCache[isbn] = isbnCache[candidate] = book;
