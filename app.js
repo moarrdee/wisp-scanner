@@ -873,6 +873,14 @@ const DESC_ROMANCE_SIGNALS = [
   'instalove','insta-love','romantically','their chemistry',
   'fell in love','falls in love','fall in love',
   'attraction between','drawn to each other','heart races',
+  // possessive/belonging language common in romantasy blurbs
+  "i'm his","she's mine","he's mine","you're mine","says i'm his",
+  // tension/attraction phrases common in fantasy romance blurbs
+  'heart trip','heart flutter','heart skip','can\'t resist','drawn to him',
+  'drawn to her','drawn to them','dangerously tempting','forbidden attraction',
+  'undeniable attraction','undeniable chemistry','irresistible','desire for him',
+  'desire for her','yearning for','longing for','wants him','wants her',
+  'tension between them','pull between','magnetic pull','pull toward',
 ];
 const EROTICA_TERMS = [
   'erotica','erotic fiction','erotic romance','erotic literature',
