@@ -442,6 +442,7 @@ async function performSearch() {
     } else {
       books = await searchByQuery(t, a);
     }
+    books = await enrichWithDescriptions(books);
     renderResults(books);
   } catch (e) {
     if (e.name === 'AbortError') return;
@@ -522,28 +523,6 @@ function renderResults(books) {
     });
   });
 
-  // Background: fetch descriptions for books that don't yet show a romance badge
-  // (categories alone often lack romance signals — description keywords are needed).
-  // Fires for all books with a /works/ key; uses the closure-captured book reference
-  // so stale currentResults mutations from other async paths don't affect the check.
-  books.forEach((book, i) => {
-    if (hasRomanticThemes(book)) return; // already showing romance — skip
-    if (!book.id?.startsWith('/works/')) return;
-    fetchDescription(book.id).then(desc => {
-      if (!desc) return;
-      const enriched = Object.assign({}, book, { description: desc });
-      if (!hasRomanticThemes(enriched)) return; // description didn't add romance
-      currentResults[i] = enriched;
-      const card = document.querySelector(`[data-card-idx="${i}"]`);
-      if (!card) return;
-      const badgesEl = card.querySelector('.book-badges');
-      if (!badgesEl) return;
-      const newAge    = ageRating(enriched);
-      const newColour = AGE_COLOURS[newAge] || '#9B804A';
-      const newIcon   = AGE_ICONS[newAge] || '';
-      badgesEl.innerHTML = `<span class="badge badge-age" style="--badge-color:${newColour}">${newIcon}${escHtml(newAge)}</span><span class="badge badge-romance">${HEART_SVG}Romance</span>`;
-    });
-  });
 }
 
 function renderPlaceholder() {
@@ -1272,6 +1251,21 @@ function isbn13ToISBN10(isbn13) {
   for (let i = 0; i < 9; i++) sum += parseInt(nine[i], 10) * (10 - i);
   const check = (11 - (sum % 11)) % 11;
   return nine + (check === 10 ? 'X' : String(check));
+}
+
+// Fetches descriptions for all books in parallel before rendering.
+// Runs concurrently with a 2.5 s ceiling — books that don't respond in time
+// render without a description (still correct for age/romance signals that
+// come from subjects). Total latency ≈ max(individual fetch times), not sum.
+async function enrichWithDescriptions(books) {
+  return Promise.all(books.map(async book => {
+    if (book.description || !book.id?.startsWith('/works/')) return book;
+    const desc = await Promise.race([
+      fetchDescription(book.id),
+      new Promise(r => setTimeout(() => r(null), 2500)),
+    ]);
+    return desc ? Object.assign({}, book, { description: desc }) : book;
+  }));
 }
 
 async function searchByQuery(title, author) {
