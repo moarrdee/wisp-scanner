@@ -917,45 +917,57 @@ async function fetchISBNFromSearch(candidate) {
 }
 
 // Special-edition enrichment ──────────────────────────────────────────────────
-// Terms that appear in special/deluxe/collector's edition titles but not the
-// main edition. We strip these to derive the base title for a fallback search.
-const EDITION_TERMS = [
-  'deluxe edition', 'deluxe', "collector's edition", 'collectors edition',
-  'special edition', 'limited edition', 'anniversary edition',
-  'expanded edition', 'illustrated edition', 'signed edition',
-  'exclusive edition', 'trade paperback edition', 'hardcover edition',
-  'special collector', "collector's", 'collectors',
-];
+// Matches edition qualifiers that appear in parentheses, after a colon/dash,
+// or appended directly to the title. Handles patterns like:
+//   "Games Gods Play (Deluxe Limited Edition)"
+//   "Butcher & Blackbird: Collector's Edition"
+//   "The Name of the Wind Tenth Anniversary Deluxe Edition"
+const EDITION_WORD_RE = /\b(deluxe|limited|collector[\u2019']?s?|special|anniversary|illustrated|signed|exclusive|expanded|hardcover)\b/i;
 
 // Returns a (possibly enriched) copy of book. If the title contains edition
 // qualifiers AND the record is missing a cover or has very sparse categories,
-// we search Open Library for the base title + first author and merge in the
-// cover URL, subjects, page count, and /works/ id from the best matching result.
+// we search Open Library for the base title + author and merge in the
+// cover, subjects, page count, and /works/ id from the best matching result.
+// We always keep the original title, id, and ISBN so catalogue links stay correct.
 async function enrichSpecialEdition(book) {
   const lc = book.title.toLowerCase();
-  const hasEditionTerm = EDITION_TERMS.some(t => lc.includes(t));
-  if (!hasEditionTerm) return book;
+
+  // Quick check — does the title contain any edition word plus "edition"?
+  if (!EDITION_WORD_RE.test(lc) || !lc.includes('edition')) return book;
 
   // Only enrich if something useful is missing — avoids unnecessary API calls
   if (book.coverURL && book.categories.length > 5) return book;
 
-  // Strip edition qualifiers (longest first so "collector's edition" beats "edition")
-  const sorted = [...EDITION_TERMS].sort((a, b) => b.length - a.length);
-  let baseTitle = book.title.toLowerCase();
-  for (const term of sorted) baseTitle = baseTitle.replace(term, '');
-  // Restore original casing of the remaining words
-  const baseTitleWords = new Set(baseTitle.trim().split(/\s+/).filter(Boolean));
-  const originalWords  = book.title.split(/\s+/);
-  baseTitle = originalWords.filter(w => baseTitleWords.has(w.toLowerCase())).join(' ');
-  // Drop trailing colons, commas, dashes left behind after stripping
-  baseTitle = baseTitle.replace(/[\s:,\-–—]+$/, '').trim();
+  // Derive the base title by progressively stripping edition qualifiers.
+  // We handle three common patterns:
+  //   1. Parenthetical suffix:  "Title (Deluxe Limited Edition)"
+  //   2. Colon/dash suffix:     "Title: Collector's Edition"
+  //   3. Direct suffix:         "Title Deluxe Edition"
+  // Shared qualifier group — matches words like "deluxe", "collector's", "limited", etc.
+  // The \u2019 covers the curly apostrophe used in many book titles.
+  const Q = "(?:(?:deluxe|limited|collector[\\u2019']?s?|special|anniversary|illustrated|signed|exclusive|expanded|hardcover)\\s+)+";
+  let baseTitle = book.title
+    // 1. Remove entire parenthetical that contains "edition": "(Deluxe Limited Edition)"
+    .replace(/\s*\([^)]*edition[s]?\s*\)/gi, '')
+    // 2. Remove colon/dash suffix where the suffix is just an edition qualifier:
+    //    ": Collector's Edition"  or  "— Deluxe Edition"
+    .replace(new RegExp('\\s*[:\\u2013\\u2014\\-]\\s*' + Q + 'edition[s]?\\s*$', 'gi'), '')
+    // 3. Remove trailing edition phrase appended without punctuation:
+    //    "A Court of Thorns and Roses Special Edition"
+    .replace(new RegExp('\\s+' + Q + 'edition[s]?\\s*$', 'gi'), '')
+    // 4. Clean up leftover punctuation/whitespace
+    .replace(/[\s:,\-\u2013\u2014(]+$/, '')
+    .trim();
 
-  if (!baseTitle || baseTitle.toLowerCase() === book.title.toLowerCase().trim()) return book;
+  if (!baseTitle || baseTitle.toLowerCase() === book.title.trim().toLowerCase()) return book;
 
   const author = book.authors?.[0] ?? '';
   try {
-    const params = new URLSearchParams({ title: baseTitle, fields: SEARCH_FIELDS, limit: '5' });
-    if (author) params.set('author', author);
+    // Use q= (full-text) rather than title= so "Games Gods Play" matches
+    // "The Games Gods Play" — title= does exact prefix matching and can miss
+    // records where "The" is indexed inconsistently.
+    const q = author ? `${baseTitle} ${author}` : baseTitle;
+    const params = new URLSearchParams({ q, fields: SEARCH_FIELDS, limit: '5' });
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 8000);
@@ -966,25 +978,31 @@ async function enrichSpecialEdition(book) {
     const json  = await res.json();
     const found = (json.docs || []).map(bookFromDoc).filter(Boolean);
 
-    // Prefer a result that has both a cover and a /works/ id; fall back to just a cover.
-    const best = found.find(b => b.coverURL && b.id?.startsWith('/works/'))
-              ?? found.find(b => b.coverURL)
-              ?? found[0];
+    // Only accept results where at least one author name overlaps
+    const authorLC = author.toLowerCase();
+    const sameAuthor = b => !author ||
+      (b.authors || []).some(a =>
+        a.toLowerCase().includes(authorLC) || authorLC.includes(a.toLowerCase()));
+
+    const candidates = found.filter(sameAuthor);
+
+    // Prefer: has cover + /works/ id > has cover > any match
+    const best = candidates.find(b => b.coverURL && b.id?.startsWith('/works/'))
+              ?? candidates.find(b => b.coverURL)
+              ?? candidates[0];
     if (!best) return book;
 
     return {
       ...book,
-      // Fill gaps from the main edition; never overwrite data the special edition already has
       coverURL:   book.coverURL   ?? best.coverURL,
-      categories: book.categories.length >= best.categories.length
+      categories: book.categories.length > best.categories.length
                     ? book.categories : best.categories,
       pageCount:  book.pageCount  ?? best.pageCount,
-      // Use the /works/ id from the main edition when the special-edition record lacks one
-      // (a /works/ id enables the lazy description fetch in the detail view)
+      // Use /works/ id from main edition to enable description lazy-fetch
       id: book.id.startsWith('/works/') ? book.id : (best.id ?? book.id),
     };
   } catch {
-    return book; // enrichment is best-effort — never fail the main lookup
+    return book; // enrichment is always best-effort
   }
 }
 
