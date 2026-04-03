@@ -420,9 +420,10 @@ function openDetail(book) {
 function closeDetail() {
   document.getElementById('view-detail').classList.add('hidden');
   lastScanned = null;
-  // Restart the camera after a short delay so the previous media track has time
-  // to fully release before Quagga requests a new one — prevents black screen.
-  if (currentTab === 'scan') setTimeout(startScanner, 300);
+  // Call startScanner synchronously — iOS requires getUserMedia to be invoked
+  // within the same user-gesture call stack as the button tap. A setTimeout
+  // breaks that context and silently blocks the camera on Safari.
+  if (currentTab === 'scan') startScanner();
 }
 
 function detailHTML(book) {
