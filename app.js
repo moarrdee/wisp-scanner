@@ -9,6 +9,16 @@ const AGE_COLOURS = {
   'Mature (18+)': '#F54236',
 };
 
+// ── Age rating badge icons (SF Symbol equivalents as inline SVG) ─────────────
+const AGE_ICONS = {
+  'Kids':         `<svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>`,
+  'Middle Grade': `<svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><path d="M21 5c-1.11-.35-2.33-.5-3.5-.5-1.95 0-4.05.4-5.5 1.5-1.45-1.1-3.55-1.5-5.5-1.5S2.45 4.9 1 6v14.65c0 .25.25.5.5.5.1 0 .15-.05.25-.05C3.1 20.45 5.05 20 6.5 20c1.95 0 4.05.4 5.5 1.5 1.35-.85 3.8-1.5 5.5-1.5 1.65 0 3.35.3 4.75 1.05.1.05.15.05.25.05.25 0 .5-.25.5-.5V6c-.6-.45-1.25-.75-2-1z"/></svg>`,
+  'Young Adult':  `<svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>`,
+  'Adult':        `<svg width="12" height="10" viewBox="0 0 28 24" fill="currentColor"><path d="M16 11c1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3 1.34 3 3 3zm-8 0c1.66 0 3-1.34 3-3S9.66 5 8 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05C16.19 13.89 17 15.02 17 16.5V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>`,
+  'Mature (18+)': `<svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/></svg>`,
+};
+const HEART_SVG = `<svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>`;
+
 // ── In-memory caches ──────────────────────────────────────────────────────────
 const queryCache = {};
 const isbnCache  = {};
@@ -51,8 +61,11 @@ function switchTab(tab) {
 // iOS Safari 14.1+ (ES2020 support). The module fetches its own .wasm file
 // from the same CDN origin (CORS: Access-Control-Allow-Origin: *).
 let _scanFn = null;
-import('https://cdn.jsdelivr.net/npm/@undecaf/zbar-wasm@0.11.0/dist/index.mjs')
-  .then(m => { _scanFn = m.scanImageData; })
+// Use the inlined build — WASM binary is bundled in the .mjs file itself so
+// there is no separate .wasm fetch that can silently fail on iOS Safari when
+// the CORS/referrer policy for the CDN sub-resource differs from the module.
+import('https://cdn.jsdelivr.net/npm/@undecaf/zbar-wasm@0.11.0/dist/inlined/index.mjs')
+  .then(m => { _scanFn = m.scanImageData ?? m.default?.scanImageData ?? null; })
   .catch(() => {}); // non-fatal; scanner surfaces its own error if still null
 
 let _videoEl    = null;  // <video> showing live camera feed
@@ -400,7 +413,7 @@ function clearSearch() {
     const cb = el.nextElementSibling;
     if (cb) cb.classList.add('hidden');
   });
-  document.getElementById('search-results').innerHTML = '';
+  renderPlaceholder();
   document.getElementById('search-btn').disabled = true;
   document.getElementById('clear-btn').classList.add('hidden');
   document.getElementById('search-label').textContent = 'Search Books';
@@ -455,8 +468,8 @@ function setSearchLoading(on) {
           <div class="wisp-orb"></div><div class="wisp-orb"></div>
           <div class="wisp-orb"></div><div class="wisp-orb"></div>
         </div>
-        <p style="font-style:italic;margin-top:16px">The wisps are searching…</p>
-        <p style="font-size:12px;margin-top:4px">consulting the ancient tomes</p>
+        <p style="font-family:Georgia,serif;font-style:italic;margin-top:16px;font-size:15px">The wisps are searching…</p>
+        <p style="font-size:12px;margin-top:4px;color:var(--gold);opacity:0.65">consulting the ancient tomes</p>
       </div>`;
   } else {
     document.getElementById('search-spinner')?.remove();
@@ -467,8 +480,13 @@ function renderResults(books) {
   currentResults = books;
   const el = document.getElementById('search-results');
   if (!books.length) {
+    const BOOK_ICON = `<svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>`;
     el.innerHTML = `<div class="state-view">
-      <p style="font-size:28px;margin-bottom:8px">📚</p>
+      <div class="state-icon-wrap">
+        <div class="state-orb"></div>
+        <div class="state-orb state-orb-sm" style="left:60px;top:10px;background:radial-gradient(circle,#59b88533 0%,#59b8850a 50%,transparent 70%);box-shadow:none"></div>
+        <span class="state-icon" style="color:var(--gold);opacity:0.7">${BOOK_ICON}</span>
+      </div>
       <h2>The wisps found nothing</h2>
       <p>Try a different title, author, or ISBN</p></div>`;
     return;
@@ -482,11 +500,37 @@ function renderResults(books) {
   document.getElementById('clear-btn').classList.remove('hidden');
 }
 
+function renderPlaceholder() {
+  currentResults = [];
+  const LOGO = 'https://www.wispbookshop.com/uploads/b/83d087e4aa8e2de4459401d9bcf103ff53ee9d453751c4902ece251eb7bbef58/Wisp-Bookshop-Logo-3_1752237750.png';
+  document.getElementById('search-results').innerHTML = `
+    <div class="search-placeholder">
+      <div class="ph-float-wisps" aria-hidden="true">
+        <div class="ph-wisp ph-tl"></div>
+        <div class="ph-wisp ph-tr"></div>
+        <div class="ph-wisp ph-bl"></div>
+        <div class="ph-wisp ph-br"></div>
+      </div>
+      <div class="ph-logo-wrap">
+        <div class="ph-orb-lg"></div>
+        <div class="ph-orb-sm"></div>
+        <img class="ph-logo" src="${LOGO}" alt="Wisp Bookshop" loading="lazy">
+      </div>
+      <h2 class="ph-title">Find Your Next Read</h2>
+      <p class="ph-sub">Search by title, author, ISBN,<br>or any combination</p>
+      <p class="ph-tagline">because reality is overrated</p>
+    </div>`;
+}
+
 function renderError(msg) {
+  const WARN = `<svg width="36" height="36" viewBox="0 0 24 24" fill="currentColor"><path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/></svg>`;
   document.getElementById('search-results').innerHTML = `
     <div class="state-view">
-      <p style="font-size:32px;margin-bottom:8px">⚠️</p>
-      <h2 style="color:var(--gold)">${escHtml(msg)}</h2>
+      <div class="state-icon-wrap">
+        <div class="state-orb" style="background:radial-gradient(circle,#FF990033 0%,#FF990011 50%,transparent 70%);box-shadow:0 0 33px #FF990022"></div>
+        <span class="state-icon" style="color:var(--gold)">${WARN}</span>
+      </div>
+      <h2>${escHtml(msg)}</h2>
       <button class="btn-primary" style="margin-top:16px;max-width:160px" onclick="performSearch()">Try Again</button>
     </div>`;
 }
@@ -497,8 +541,9 @@ function bookCardHTML(book, idx) {
   const thumb  = book.coverURL
     ? `<img src="${escHtml(book.coverURL)}" alt="" loading="lazy" onerror="this.parentElement.innerHTML='<span class=thumb-placeholder>📖</span>'">`
     : `<span class="thumb-placeholder">📖</span>`;
+  const ageIcon = AGE_ICONS[age] || '';
   const romance = hasRomanticThemes(book)
-    ? `<span class="badge badge-romance">♥ Romance</span>` : '';
+    ? `<span class="badge badge-romance">${HEART_SVG}Romance</span>` : '';
 
   return `<div class="book-card" onclick="openBookByIndex(${idx})" role="button" tabindex="0"
     onkeydown="if(event.key==='Enter')openBookByIndex(${idx})">
@@ -507,7 +552,7 @@ function bookCardHTML(book, idx) {
       <div class="book-title">${escHtml(book.title)}</div>
       <div class="book-author">${escHtml(book.authors?.join(', ') || 'Unknown Author')}</div>
       <div class="book-badges">
-        <span class="badge badge-age" style="--badge-color:${colour}">${escHtml(age)}</span>
+        <span class="badge badge-age" style="--badge-color:${colour}">${ageIcon}${escHtml(age)}</span>
         ${romance}
       </div>
     </div>
@@ -1257,18 +1302,6 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
-  // Show placeholder in search results
-  document.getElementById('search-results').innerHTML = `
-    <div class="state-view">
-      <div class="wisp-cluster">
-        <div class="wisp-orb" style="--size:80px;--dur:3.2s;--gold:1"></div>
-        <div class="wisp-orb" style="--size:42px;--dur:4.1s;--gold:0;left:52px;top:30px"></div>
-      </div>
-      <h2 style="margin-top:16px">Find Your Next Read</h2>
-      <p>Search by title, author, ISBN,<br>or any combination</p>
-      <p class="tagline">because reality is overrated</p>
-    </div>`;
-
-  // Start scanner on load
+  renderPlaceholder();
   startScanner();
 });
