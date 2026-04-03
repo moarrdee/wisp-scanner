@@ -14,8 +14,9 @@ const queryCache = {};
 const isbnCache  = {};
 
 // ── State ─────────────────────────────────────────────────────────────────────
-let currentTab    = 'scan';
-let searchPending = null;   // AbortController for in-flight search
+let currentTab       = 'scan';
+let searchPending    = null;   // AbortController for in-flight search
+let currentDetailId  = null;   // tracks which book's detail is open (prevents stale desc race)
 
 // ── Custom error to distinguish deliberate throws from network failures ────────
 class FetchError extends Error {
@@ -174,16 +175,22 @@ async function handleScannedISBN(isbn) {
     const books = await searchByISBN(isbn);
     resultEl.classList.add('hidden');
     if (books.length > 0) openDetail(books[0]);
-  } catch (_) {
-    // Book not found — offer to search by title/author, pre-filling the ISBN
+  } catch (e) {
+    // Distinguish a genuine "not found" from a network/server error
+    const isNetworkError = e.name === 'FetchError' &&
+      (e.message.includes('Network') || e.message.includes('respond') || e.message.includes('Server'));
+    const title   = isNetworkError ? 'Connection problem'   : 'Book not found';
+    const message = isNetworkError
+      ? 'Could not reach the catalogue. Check your connection and try again.'
+      : 'No match for this barcode in the catalogue. Try searching by title or author.';
     resultEl.innerHTML = `
       <div class="scan-status-card">
-        <p style="font-size:28px">📚</p>
-        <p class="scan-status-title">Book not found</p>
-        <p class="scan-status-sub">No match for this barcode in the catalogue. Try searching by title or author.</p>
+        <p style="font-size:28px">${isNetworkError ? '⚠️' : '📚'}</p>
+        <p class="scan-status-title">${title}</p>
+        <p class="scan-status-sub">${message}</p>
         <div class="scan-status-actions">
-          <button class="btn-primary" onclick="scanGoToSearch()">Search by title / author</button>
-          <button class="read-more-btn" onclick="scanRetry()">Scan a different barcode</button>
+          ${isNetworkError ? '' : '<button class="btn-primary" onclick="scanGoToSearch()">Search by title / author</button>'}
+          <button class="read-more-btn" onclick="scanRetry()">${isNetworkError ? 'Try again' : 'Scan a different barcode'}</button>
         </div>
       </div>`;
     lastScanned = null;
@@ -246,9 +253,7 @@ function clearSearch() {
   document.getElementById('search-btn').disabled = true;
   document.getElementById('clear-btn').classList.add('hidden');
   document.getElementById('search-label').textContent = 'Search Books';
-  const icon = document.getElementById('search-icon');
-  icon.style.display = '';
-  document.getElementById('search-btn').disabled = true;
+  document.getElementById('search-icon').style.display = '';
 }
 
 async function performSearch() {
@@ -365,14 +370,23 @@ function openBookByIndex(i) { openDetail(currentResults[i]); }
 
 // ── Detail view ───────────────────────────────────────────────────────────────
 function openDetail(book) {
-  currentResults = currentResults.length ? currentResults : [book];
+  currentResults  = currentResults.length ? currentResults : [book];
+  currentDetailId = book.id;   // guard against stale description race conditions
+  descExpanded    = false;     // always start with description collapsed
+
   const detail = document.getElementById('view-detail');
   document.getElementById('detail-content').innerHTML = detailHTML(book);
   detail.classList.remove('hidden');
 
+  // Precompute ratings without description — used to detect change after fetch
+  const baseAge     = ageRating(book);
+  const baseRomance = hasRomanticThemes(book);
+
   // Lazy-load description
   if (book.id && book.id.startsWith('/works/')) {
     fetchDescription(book.id).then(desc => {
+      // Guard: if user has already navigated to a different book, discard result
+      if (book.id !== currentDetailId) return;
       if (!desc) return;
 
       // Update description text
@@ -392,9 +406,7 @@ function openDetail(book) {
       const bookWithDesc = Object.assign({}, book, { description: desc });
       const newAge     = ageRating(bookWithDesc);
       const newRomance = hasRomanticThemes(bookWithDesc);
-      const oldAge     = ageRating(book);
-      const oldRomance = hasRomanticThemes(book);
-      if (newAge !== oldAge || newRomance !== oldRomance) {
+      if (newAge !== baseAge || newRomance !== baseRomance) {
         const row = document.getElementById('detail-ratings-row');
         if (row) {
           const colour = AGE_COLOURS[newAge] || '#9B804A';
@@ -419,6 +431,7 @@ function openDetail(book) {
 
 function closeDetail() {
   document.getElementById('view-detail').classList.add('hidden');
+  currentDetailId = null;
   lastScanned = null;
   // Call startScanner synchronously — iOS requires getUserMedia to be invoked
   // within the same user-gesture call stack as the button tap. A setTimeout
@@ -689,7 +702,7 @@ async function fetchWithRetry(url, maxAttempts = 3) {
     try {
       const controller = new AbortController();
       searchPending = controller;
-      const timer = setTimeout(() => { timedOut = true; controller.abort(); }, 30000);
+      const timer = setTimeout(() => { timedOut = true; controller.abort(); }, 15000);
       const res = await fetch(url, { signal: controller.signal });
       clearTimeout(timer);
       searchPending = null;
@@ -848,7 +861,6 @@ async function searchByQuery(title, author) {
       const books = (json.docs || []).map(bookFromDoc).filter(Boolean);
       if (books.length) {
         queryCache[authorKey] = books;
-        currentResults = books;
         return books;
       }
     } catch (_) { /* fall through to q= */ }
@@ -877,7 +889,6 @@ async function searchByQuery(title, author) {
 
   if (!books.length) throw new Error('No books found. Try a different search.');
   queryCache[cacheKey] = books;
-  currentResults = books;
   return books;
 }
 
