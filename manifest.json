@@ -2,7 +2,7 @@
   "name": "Wisp Scanner",
   "short_name": "Wisp Scanner",
   "description": "Book lookup tool for Wisp Bookshop",
-  "start_url": "/",
+  "start_url": "/wisp-scanner/",
   "display": "standalone",
   "background_color": "#132A1F",
   "theme_color": "#132A1F",
