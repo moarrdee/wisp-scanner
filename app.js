@@ -39,8 +39,13 @@ function switchTab(tab) {
 // Uses Quagga2 for EAN/UPC decoding via canvas — works on iOS Safari and all
 // mobile browsers. BarcodeDetector is NOT used (not available on iOS).
 
-let quaggaRunning = false;
-let lastScanned   = null;
+let quaggaRunning  = false;
+let lastScanned    = null;
+// Scan confirmation state — the same valid ISBN must decode twice in a row
+// before we treat it as a confirmed read.  This filters single-frame noise
+// without adding perceptible delay (one extra frame ≈ 100 ms at 10 fps).
+let pendingISBN    = null;
+let pendingCount   = 0;
 
 function startScanner() {
   const fallback = document.getElementById('scan-fallback');
@@ -49,6 +54,8 @@ function startScanner() {
   area.classList.remove('hidden');
   fallback.classList.add('hidden');
   stopScanner();
+  pendingISBN  = null;
+  pendingCount = 0;
 
   // Remove any video/canvas elements Quagga left from a previous session.
   // Without this, re-initialising injects new elements behind the stale ones,
@@ -109,6 +116,21 @@ function startScanner() {
     // Validate the check digit and reject bad reads — keep scanning until we get
     // a valid EAN-13 (13 digits) or ISBN-10 (10 digits).
     if (!isValidISBNCode(isbn)) return;
+
+    // Confirmation: require the same valid ISBN to appear in 2 consecutive frames
+    // before treating it as a confirmed read.  A single stray frame that somehow
+    // passes the check-digit test can no longer trigger an incorrect lookup.
+    if (isbn === pendingISBN) {
+      pendingCount++;
+    } else {
+      pendingISBN  = isbn;
+      pendingCount = 1;
+    }
+    if (pendingCount < 2) return;
+
+    // Confirmed — reset and process
+    pendingISBN  = null;
+    pendingCount = 0;
 
     if (isbn !== lastScanned) {
       lastScanned = isbn;
