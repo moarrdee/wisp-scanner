@@ -102,20 +102,20 @@
           <div class="search-bg-wisp search-bg-wisp-bl"></div>
           <div class="search-bg-wisp search-bg-wisp-br"></div>
         </div>
-        <div class="search-form">
+        <form class="search-form" autocomplete="off" onsubmit="return false;">
           <div class="search-field">
             <svg class="field-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
-            <input id="input-title" type="text" placeholder="Book title" autocomplete="off" autocorrect="off" autocapitalize="words" oninput="onFieldInput(this)" onkeydown="onFieldKey(event,'title')">
+            <input id="input-title" type="text" placeholder="Book title" autocomplete="off" autocorrect="off" autocapitalize="sentences" spellcheck="false" oninput="onFieldInput(this)" onkeydown="onFieldKey(event,'title')">
             <button class="clear-x hidden" onclick="clearField('input-title')" tabindex="-1">&#10005;</button>
           </div>
           <div class="search-field">
             <svg class="field-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-            <input id="input-author" type="text" placeholder="Author name" autocomplete="off" autocorrect="off" autocapitalize="words" oninput="onFieldInput(this)" onkeydown="onFieldKey(event,'author')">
+            <input id="input-author" type="text" placeholder="Author name" autocomplete="off" autocorrect="off" autocapitalize="sentences" spellcheck="false" oninput="onFieldInput(this)" onkeydown="onFieldKey(event,'author')">
             <button class="clear-x hidden" onclick="clearField('input-author')" tabindex="-1">&#10005;</button>
           </div>
           <div class="search-field">
             <svg class="field-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="4" height="16"/><rect x="8" y="4" width="2" height="16"/><rect x="12" y="4" width="4" height="16"/><rect x="18" y="4" width="4" height="16"/></svg>
-            <input id="input-isbn" type="text" placeholder="ISBN" autocomplete="off" inputmode="numeric" oninput="onFieldInput(this)" onkeydown="onFieldKey(event,'isbn')">
+            <input id="input-isbn" type="text" placeholder="ISBN" autocomplete="off" autocapitalize="none" inputmode="numeric" oninput="onFieldInput(this)" onkeydown="onFieldKey(event,'isbn')">
             <button class="clear-x hidden" onclick="clearField('input-isbn')" tabindex="-1">&#10005;</button>
           </div>
           <div class="search-buttons">
@@ -125,7 +125,7 @@
             </button>
             <button id="clear-btn" class="btn-icon hidden" onclick="clearSearch()" aria-label="Clear">&#8635;</button>
           </div>
-        </div>
+        </form>
         <div id="search-results"></div>
       </div>
 
@@ -164,6 +164,6 @@
     <div id="info-content" class="modal-scroll"></div>
   </div>
 
-  <script src="app.js?v=5"></script>
+  <script src="app.js?v=6"></script>
 </body>
 </html>
