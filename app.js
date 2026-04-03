@@ -524,16 +524,14 @@ function renderResults(books) {
 
   // Background: fetch descriptions for books that don't yet show a romance badge
   // (categories alone often lack romance signals — description keywords are needed).
-  // Only fires for books with a /works/ key; capped at 5 per render to limit traffic.
-  let descFetchCount = 0;
+  // Fires for all books with a /works/ key; uses the closure-captured book reference
+  // so stale currentResults mutations from other async paths don't affect the check.
   books.forEach((book, i) => {
-    if (descFetchCount >= 5) return;
     if (hasRomanticThemes(book)) return; // already showing romance — skip
     if (!book.id?.startsWith('/works/')) return;
-    descFetchCount++;
     fetchDescription(book.id).then(desc => {
       if (!desc) return;
-      const enriched = Object.assign({}, currentResults[i], { description: desc });
+      const enriched = Object.assign({}, book, { description: desc });
       if (!hasRomanticThemes(enriched)) return; // description didn't add romance
       currentResults[i] = enriched;
       const card = document.querySelector(`[data-card-idx="${i}"]`);
