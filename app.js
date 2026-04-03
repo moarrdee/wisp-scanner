@@ -67,7 +67,7 @@ function startScanner() {
       willReadFrequently: true,
     },
     decoder: {
-      readers: ['ean_reader', 'ean_8_reader', 'upc_reader', 'upc_e_reader'],
+      readers: ['ean_reader'],   // ISBN barcodes are always EAN-13; fewer decoders = faster, fewer misreads
     },
     locate: true,
     numOfWorkers: 0,   // Workers require SharedArrayBuffer which is blocked on iOS
@@ -415,6 +415,8 @@ function openDetail(book) {
 function closeDetail() {
   document.getElementById('view-detail').classList.add('hidden');
   lastScanned = null;
+  // If the user came from the scan tab, restart the camera so they can scan again
+  if (currentTab === 'scan') startScanner();
 }
 
 function detailHTML(book) {
