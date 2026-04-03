@@ -13,8 +13,7 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="Wisp Scanner">
-  <!-- Quagga2: EAN/UPC barcode scanning via canvas — works on iOS Safari + Chrome -->
-  <script src="https://unpkg.com/@ericblade/quagga2@1.8.2/dist/quagga.min.js"></script>
+  <!-- ZBar WASM loaded via dynamic import() in app.js — no script tag needed -->
 </head>
 <body>
   <div id="app">
@@ -29,19 +28,53 @@
           <button class="info-btn" onclick="showInfo()" aria-label="About">&#9432;</button>
         </header>
         <div id="scanner-area">
-          <!-- Quagga2 injects its own <video> and <canvas> elements here -->
+          <!-- <video> injected here dynamically by app.js -->
           <div class="scan-overlay">
+
+            <!-- Full-screen vignette with transparent scan-zone cutout -->
             <div class="scan-cutout"></div>
-            <div class="scan-instruction"><span>Align barcode within the frame</span></div>
+
+            <!-- Floating ambient wisps — purely decorative, no pointer events -->
+            <div class="scan-wisp scan-wisp-tl"></div>
+            <div class="scan-wisp scan-wisp-tr"></div>
+            <div class="scan-wisp scan-wisp-bl"></div>
+            <div class="scan-wisp scan-wisp-br"></div>
+            <div class="scan-wisp scan-wisp-left"></div>
+            <div class="scan-wisp scan-wisp-right"></div>
+
+            <!-- Instruction pill above scan box -->
+            <div class="scan-header-pill">
+              <span class="scan-header-title">Reveal Your Book</span>
+              <span class="scan-header-sub">Align the barcode within the golden frame</span>
+            </div>
+
+            <!-- Scan zone -->
             <div id="scan-box">
               <span class="corner tl"></span>
               <span class="corner tr"></span>
               <span class="corner bl"></span>
               <span class="corner br"></span>
+              <!-- ✦ stars positioned just outside the four corners -->
+              <span class="scan-star scan-star-tl">✦</span>
+              <span class="scan-star scan-star-tr">✦</span>
+              <span class="scan-star scan-star-bl">✦</span>
+              <span class="scan-star scan-star-br">✦</span>
               <div class="scan-line"></div>
             </div>
+
+            <!-- "Found it!" flash -->
             <div class="scan-flash" id="scan-flash"><span>✦ Found it!</span></div>
-          </div>
+
+            <!-- Format hint bar below scan zone -->
+            <div class="scan-hint-bar">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="14" height="14">
+                <rect x="2" y="6" width="5" height="12" rx="1"/><rect x="9" y="6" width="2" height="12"/>
+                <rect x="13" y="6" width="4" height="12" rx="1"/><rect x="19" y="6" width="3" height="12"/>
+              </svg>
+              <span>ISBN-13 · ISBN-10 · EAN · UPC</span>
+            </div>
+
+          </div><!-- .scan-overlay -->
           <button class="manual-isbn-btn" onclick="showManualISBN()">⌨ Type ISBN</button>
           <div id="scan-result" class="hidden"></div>
         </div>
@@ -62,6 +95,13 @@
           <img class="nav-logo" src="https://www.wispbookshop.com/uploads/b/83d087e4aa8e2de4459401d9bcf103ff53ee9d453751c4902ece251eb7bbef58/Wisp-Bookshop-Logo-3_1752237750.png" alt="Wisp Bookshop">
           <button class="info-btn" onclick="showInfo()" aria-label="About">&#9432;</button>
         </header>
+        <!-- Ambient background wisps (always present, behind form + results) -->
+        <div class="search-bg-wisps" aria-hidden="true">
+          <div class="search-bg-wisp search-bg-wisp-tl"></div>
+          <div class="search-bg-wisp search-bg-wisp-tr"></div>
+          <div class="search-bg-wisp search-bg-wisp-bl"></div>
+          <div class="search-bg-wisp search-bg-wisp-br"></div>
+        </div>
         <div class="search-form">
           <div class="search-field">
             <svg class="field-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
