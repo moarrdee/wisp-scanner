@@ -72,8 +72,19 @@ function startScanner() {
       // Quagga draws its own canvas overlay — we don't need it
       willReadFrequently: true,
     },
+    locator: {
+      // halfSample halves the image before processing — dramatically speeds up
+      // single-threaded decode (required since numOfWorkers: 0 on iOS).
+      // patchSize 'medium' balances detection range vs. close-up barcode accuracy.
+      patchSize: 'medium',
+      halfSample: true,
+    },
+    // Process at most 10 frames/sec — gives the JS engine more time per frame
+    // to locate and decode difficult barcodes without dropping frames entirely.
+    frequency: 10,
     decoder: {
       readers: ['ean_reader', 'ean_8_reader', 'upc_reader', 'upc_e_reader'],
+      multiple: false,
     },
     locate: true,
     numOfWorkers: 0,   // Workers require SharedArrayBuffer which is blocked on iOS
@@ -191,6 +202,7 @@ async function handleScannedISBN(isbn) {
         <div class="scan-status-actions">
           ${isNetworkError ? '' : '<button class="btn-primary" onclick="scanGoToSearch()">Search by title / author</button>'}
           <button class="read-more-btn" onclick="scanRetry()">${isNetworkError ? 'Try again' : 'Scan a different barcode'}</button>
+          <button class="read-more-btn" onclick="showManualISBN()">Type ISBN manually</button>
         </div>
       </div>`;
     lastScanned = null;
@@ -205,6 +217,45 @@ function scanGoToSearch() {
 function scanRetry() {
   document.getElementById('scan-result').classList.add('hidden');
   startScanner();
+}
+
+function showManualISBN() {
+  stopScanner();
+  const resultEl = document.getElementById('scan-result');
+  resultEl.innerHTML = `
+    <div class="scan-status-card">
+      <p style="font-size:26px">⌨️</p>
+      <p class="scan-status-title">Enter ISBN</p>
+      <p class="scan-status-sub">Type or paste the 10 or 13‑digit ISBN from the back of the book.</p>
+      <input id="manual-isbn-input" type="text" inputmode="numeric"
+        placeholder="e.g. 9781649376565"
+        autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false"
+        onkeydown="if(event.key==='Enter')submitManualISBN()"
+        style="width:100%;padding:12px 14px;border-radius:10px;border:1px solid #9b804a60;background:#132A1F;color:#F2EDE3;font-size:16px;margin-top:8px;outline:none;text-align:center;letter-spacing:1px;">
+      <div class="scan-status-actions" style="margin-top:4px">
+        <button class="btn-primary" onclick="submitManualISBN()">Look Up</button>
+        <button class="read-more-btn" onclick="scanRetry()">Back to scanner</button>
+      </div>
+    </div>`;
+  resultEl.classList.remove('hidden');
+  // Small delay ensures the element is in the DOM before focusing
+  setTimeout(() => document.getElementById('manual-isbn-input')?.focus(), 60);
+}
+
+function submitManualISBN() {
+  const input = document.getElementById('manual-isbn-input');
+  if (!input) return;
+  // Strip hyphens, spaces, and any non-digit except trailing X for ISBN-10
+  const raw  = input.value.trim();
+  const isbn = raw.replace(/[-\s]/g, '').toUpperCase();
+  const digits = isbn.replace(/[^0-9X]/g, '');
+  if (digits.length < 10) {
+    input.style.borderColor = '#F54236';
+    input.focus();
+    return;
+  }
+  document.getElementById('scan-result').classList.add('hidden');
+  handleScannedISBN(digits);
 }
 
 // ── Search form logic ─────────────────────────────────────────────────────────
@@ -741,15 +792,37 @@ async function searchByISBN(isbn) {
   // We try each candidate in order (primary ISBN first, then variants) and stop
   // at the first hit — no parallel same-endpoint blasting that would trigger 429s.
   for (const candidate of candidates) {
-    const book = await Promise.any([
-      fetchISBNFromBooksAPI(candidate),
-      fetchISBNFromSearch(candidate),
-    ]).catch(() => null);
+    // Both requests fire immediately — they run in parallel.
+    const booksPromise  = fetchISBNFromBooksAPI(candidate);
+    const searchPromise = fetchISBNFromSearch(candidate);
 
-    if (book) {
-      isbnCache[isbn] = isbnCache[candidate] = book;
-      return [book];
+    const winner = await Promise.any([booksPromise, searchPromise]).catch(() => null);
+    if (!winner) continue;
+
+    let book = winner;
+
+    // The search index returns a /works/ key which enables description fetching and
+    // carries richer subject tags. The Books API sometimes wins the race but returns
+    // only an /isbn/ key (no works link). When that happens, wait briefly for the
+    // already-in-flight search request to arrive and use it for the richer metadata.
+    if (!winner.id.startsWith('/works/')) {
+      const searchBook = await Promise.race([
+        searchPromise.catch(() => null),
+        sleep(2500).then(() => null),
+      ]);
+      if (searchBook?.id?.startsWith('/works/')) {
+        // Merge: keep works key from search; fill cover/pages/publisher from whichever has them.
+        book = {
+          ...searchBook,
+          coverURL:  searchBook.coverURL  ?? winner.coverURL,
+          pageCount: searchBook.pageCount ?? winner.pageCount,
+          publisher: searchBook.publisher ?? winner.publisher,
+        };
+      }
     }
+
+    isbnCache[isbn] = isbnCache[candidate] = book;
+    return [book];
   }
 
   throw new FetchError('No books found. Try a different search.');
@@ -913,7 +986,9 @@ function bookFromBooksAPI(d, isbn) {
     description:   null,
     categories:    (d.subjects || []).slice(0, 30).map(s => s.name),
     maturityRating:'NOT_MATURE',
-    pageCount:     d.number_of_pages ?? null,
+    // Books API uses 'number_of_pages' on most editions but 'pagination' on some
+    // (e.g. "pagination": "592") — parse both so page count is never silently lost.
+    pageCount:     d.number_of_pages ?? (d.pagination ? parseInt(d.pagination, 10) || null : null),
     publishedDate: d.publish_date ?? null,
     publisher:     d.publishers?.[0]?.name ?? null,
     coverURL:      d.cover?.medium ?? null,
