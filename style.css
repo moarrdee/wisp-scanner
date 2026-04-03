@@ -33,8 +33,6 @@ html, body {
 }
 
 /* ── Views ────────────────────────────────────────────── */
-/* #views must be flex:1 so it fills the space between the top and tab bar.
-   Without this, .view children have no constrained height and can't scroll. */
 #views {
   flex: 1;
   display: flex;
@@ -59,7 +57,6 @@ html, body {
 }
 .view.modal.hidden { display: none; }
 
-/* Modals that don't carry the .view class */
 .modal {
   position: fixed;
   inset: 0;
@@ -74,8 +71,6 @@ html, body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  /* min-height ensures the bar is always tall enough even when safe-top is large
-     (e.g. 44px on notch iPhones). Fixed height would squash content to ~8px. */
   min-height: calc(var(--nav-h) + var(--safe-top));
   padding: var(--safe-top) 16px 10px;
   background: var(--dark-green);
@@ -146,9 +141,8 @@ img.nav-logo {
   background: #000;
 }
 
-/* Quagga2 injects <video> and all <canvas> elements — push them behind our UI */
-#scanner-area video,
-#scanner-area canvas {
+/* Video injected by app.js fills the area */
+#scanner-area video {
   position: absolute;
   inset: 0;
   width: 100% !important;
@@ -156,9 +150,8 @@ img.nav-logo {
   object-fit: cover;
   z-index: 1;
 }
-/* Hide all of Quagga's debug/drawing canvases — we supply our own overlay */
-#scanner-area canvas { display: none !important; }
 
+/* ── Scanner overlay ─────────────────────────────────── */
 .scan-overlay {
   position: absolute;
   inset: 0;
@@ -167,20 +160,63 @@ img.nav-logo {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 0;
+  pointer-events: none; /* children re-enable where needed */
 }
 
-/* Dark vignette around the clear scan window */
+/* Dark vignette with transparent scan-zone window — matches iOS ScanVignetteShape */
 .scan-cutout {
   position: absolute;
   inset: 0;
+  /* even-odd technique: full-screen dark mask minus the scan rectangle */
   background:
-    linear-gradient(#000000aa, #000000aa) top    / 100% calc(50% - 60px) no-repeat,
-    linear-gradient(#000000aa, #000000aa) bottom / 100% calc(50% - 60px) no-repeat,
-    linear-gradient(#000000aa, #000000aa) left   / calc(50% - 140px) 120px no-repeat,
-    linear-gradient(#000000aa, #000000aa) right  / calc(50% - 140px) 120px no-repeat;
+    linear-gradient(#000000a0, #000000a0) top    / 100% calc(50% - 60px) no-repeat,
+    linear-gradient(#000000a0, #000000a0) bottom / 100% calc(50% - 60px) no-repeat,
+    linear-gradient(#000000a0, #000000a0) left   / calc(50% - 140px) 120px no-repeat,
+    linear-gradient(#000000a0, #000000a0) right  / calc(50% - 140px) 120px no-repeat;
 }
 
+/* ── Ambient wisp orbs around the scan zone — match iOS wispOrbs() ── */
+.scan-wisp {
+  position: absolute;
+  border-radius: 50%;
+  pointer-events: none;
+  animation: pulse 3s ease-in-out infinite alternate;
+}
+.scan-wisp-tl  { width:36px;height:36px; background:radial-gradient(circle,#9b804a55 0%,#9b804a22 50%,transparent 70%); box-shadow:0 0 22px #9b804a33; top:28%; left:6%;  animation-duration:2.8s; }
+.scan-wisp-tr  { width:26px;height:26px; background:radial-gradient(circle,#9b804a55 0%,#9b804a22 50%,transparent 70%); box-shadow:0 0 16px #9b804a33; top:52%; right:6%; animation-duration:3.4s; }
+.scan-wisp-bl  { width:28px;height:28px; background:radial-gradient(circle,#59b88555 0%,#59b88522 50%,transparent 70%); box-shadow:0 0 17px #59b88533; top:72%; left:12%; animation-duration:4.0s; }
+.scan-wisp-br  { width:22px;height:22px; background:radial-gradient(circle,#59b88555 0%,#59b88522 50%,transparent 70%); box-shadow:0 0 13px #59b88533; top:28%; right:12%; animation-duration:3.2s; }
+.scan-wisp-left  { width:20px;height:20px; background:radial-gradient(circle,#9b804a55 0%,#9b804a22 50%,transparent 70%); box-shadow:0 0 12px #9b804a33; top:42%; left:3%;  animation-duration:2.3s; }
+.scan-wisp-right { width:16px;height:16px; background:radial-gradient(circle,#9b804a55 0%,#9b804a22 50%,transparent 70%); box-shadow:0 0 10px #9b804a33; top:60%; right:3%; animation-duration:3.8s; }
+
+/* Instruction pill above scan zone — matches iOS "Reveal Your Book" header */
+.scan-header-pill {
+  position: absolute;
+  top: calc(50% - 118px);
+  left: 50%; transform: translateX(-50%);
+  background: rgba(0,0,0,0.62);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border-radius: 14px;
+  padding: 10px 20px;
+  text-align: center;
+  white-space: nowrap;
+  display: flex; flex-direction: column; gap: 3px;
+}
+.scan-header-title {
+  display: block;
+  font-family: Georgia, serif;
+  font-size: 14px; font-weight: 600;
+  color: var(--cream);
+}
+.scan-header-sub {
+  display: block;
+  font-size: 12px;
+  color: var(--cream);
+  opacity: 0.75;
+}
+
+/* Scan zone box */
 #scan-box {
   position: relative;
   width: 280px; height: 120px;
@@ -190,63 +226,63 @@ img.nav-logo {
 }
 #scan-box.detected {
   box-shadow: 0 0 0 3px var(--gold);
+  border-radius: 10px;
 }
-/* First-frame "locking on" state — dim glow signals hold-steady without
-   the jarring full flash that would trigger camera movement. */
 #scan-box.locking {
-  box-shadow: 0 0 0 2px rgba(155, 128, 74, 0.45);
+  box-shadow: 0 0 0 2px rgba(155,128,74,0.45);
+  border-radius: 10px;
   transition: box-shadow 0.1s;
 }
+
+/* L-shaped corner brackets — matches iOS RoundedRectangle .stroke corners */
 #scan-box .corner {
   position: absolute;
-  width: 24px; height: 24px;
+  width: 22px; height: 22px;
   border-color: var(--gold); border-style: solid;
-  transition: border-color 0.15s;
 }
-.corner.tl { top: 0; left: 0;  border-width: 3px 0 0 3px; }
-.corner.tr { top: 0; right: 0; border-width: 3px 3px 0 0; }
-.corner.bl { bottom: 0; left: 0;  border-width: 0 0 3px 3px; }
-.corner.br { bottom: 0; right: 0; border-width: 0 3px 3px 0; }
+.corner.tl { top: 0; left: 0;  border-width: 2.5px 0 0 2.5px; border-radius: 4px 0 0 0; }
+.corner.tr { top: 0; right: 0; border-width: 2.5px 2.5px 0 0; border-radius: 0 4px 0 0; }
+.corner.bl { bottom: 0; left: 0;  border-width: 0 0 2.5px 2.5px; border-radius: 0 0 0 4px; }
+.corner.br { bottom: 0; right: 0; border-width: 0 2.5px 2.5px 0; border-radius: 0 0 4px 0; }
 
+/* ✦ stars just outside corners — matches iOS starCorner */
+.scan-star {
+  position: absolute;
+  font-size: 11px;
+  color: var(--gold);
+  opacity: 0.65;
+  animation: starPulse 1.4s ease-in-out infinite alternate;
+  line-height: 1;
+}
+.scan-star-tl { top: -18px; left: -18px; }
+.scan-star-tr { top: -18px; right: -18px; }
+.scan-star-bl { bottom: -18px; left: -18px; }
+.scan-star-br { bottom: -18px; right: -18px; }
+@keyframes starPulse {
+  from { opacity: 0.45; }
+  to   { opacity: 0.85; }
+}
+
+/* Sweeping scan line */
 .scan-line {
   position: absolute;
   left: 4px; right: 4px;
   height: 2px;
-  background: linear-gradient(90deg, transparent, var(--gold), transparent);
-  animation: scanline 2s ease-in-out infinite;
+  background: linear-gradient(90deg, transparent, var(--gold) 30%, var(--gold) 70%, transparent);
+  border-radius: 1px;
+  animation: scanline 1.8s ease-in-out infinite;
   top: 50%;
 }
 @keyframes scanline {
   0%, 100% { transform: translateY(-44px); opacity: 0; }
-  15%, 85%  { opacity: 1; }
+  15%, 85%  { opacity: 0.8; }
   50%       { transform: translateY(44px); }
 }
 
-/* Instruction text above the scan box */
-.scan-instruction {
-  position: absolute;
-  top: calc(50% - 90px);
-  left: 0; right: 0;
-  text-align: center;
-  z-index: 3;
-  pointer-events: none;
-}
-.scan-instruction span {
-  display: inline-block;
-  background: #000000aa;
-  color: var(--cream);
-  font-size: 13px;
-  font-family: Georgia, serif;
-  font-style: italic;
-  padding: 5px 14px;
-  border-radius: 20px;
-  opacity: 0.9;
-}
-
-/* "Scanned!" flash below the box */
+/* "Found it!" confirmation flash */
 .scan-flash {
   position: absolute;
-  top: calc(50% + 76px);
+  top: calc(50% + 80px);
   left: 0; right: 0;
   text-align: center;
   z-index: 3;
@@ -259,15 +295,50 @@ img.nav-logo {
   display: inline-block;
   background: var(--gold);
   color: var(--dark-green);
-  font-size: 13px;
-  font-weight: 700;
-  padding: 5px 16px;
+  font-size: 13px; font-weight: 700;
+  padding: 6px 18px;
   border-radius: 20px;
+  box-shadow: 0 2px 12px #9b804a60;
 }
 
-.scan-hint {
-  display: none; /* replaced by .scan-instruction */
+/* Format hint bar below scan zone — sits ~80px below scan box centre */
+.scan-hint-bar {
+  position: absolute;
+  top: calc(50% + 80px);
+  left: 50%; transform: translateX(-50%);
+  height: fit-content;
+  display: flex; align-items: center; gap: 6px;
+  background: rgba(0,0,0,0.52);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  border-radius: 20px;
+  padding: 8px 16px;
+  color: var(--cream);
+  font-size: 11px; opacity: 0.75;
+  white-space: nowrap;
 }
+
+/* ── Ambient background wisps for Search tab ─────────── */
+#view-search { position: relative; }
+.search-bg-wisps {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  overflow: hidden;
+}
+.search-bg-wisp {
+  position: absolute;
+  border-radius: 50%;
+  animation: pulse 4s ease-in-out infinite alternate;
+}
+.search-bg-wisp-tl { width:110px;height:110px; left:-10px; top:18%; background:radial-gradient(circle,#9b804a22 0%,#9b804a0a 50%,transparent 70%); animation-duration:4.2s; }
+.search-bg-wisp-tr { width:80px; height:80px;  right:-10px;top:52%; background:radial-gradient(circle,#59b88520 0%,#59b8850a 50%,transparent 70%); animation-duration:5.1s; }
+.search-bg-wisp-bl { width:65px; height:65px;  left:22%;   bottom:16%; background:radial-gradient(circle,#9b804a1a 0%,#9b804a08 50%,transparent 70%); animation-duration:3.6s; }
+.search-bg-wisp-br { width:45px; height:45px;  right:22%;  top:10%; background:radial-gradient(circle,#59b88518 0%,#59b8850a 50%,transparent 70%); animation-duration:6.0s; }
+
+.search-form,
+#search-results { position: relative; z-index: 1; }
 
 /* ── Search form ──────────────────────────────────────── */
 .search-form {
@@ -282,7 +353,7 @@ img.nav-logo {
   border: 1px solid #9b804a38;
   border-radius: 12px;
   padding: 0 14px;
-  transition: border-color 0.15s, box-shadow 0.15s;
+  transition: border-color 0.2s, box-shadow 0.2s;
 }
 .search-field:focus-within {
   border-color: var(--gold);
@@ -290,14 +361,15 @@ img.nav-logo {
 }
 .field-icon {
   width: 18px; height: 18px;
-  color: var(--gold); opacity: 0.75; flex-shrink: 0;
+  color: var(--gold); opacity: 0.72; flex-shrink: 0;
+  transition: opacity 0.2s;
 }
 .search-field:focus-within .field-icon { opacity: 1; }
 .search-field input {
   flex: 1;
   background: none; border: none; outline: none;
   color: var(--cream);
-  font-size: 16px; /* 16px prevents iOS zoom */
+  font-size: 16px; /* 16px prevents iOS auto-zoom */
   padding: 13px 0;
   caret-color: var(--gold);
 }
@@ -308,14 +380,13 @@ img.nav-logo {
   color: var(--cream); opacity: 0.45; font-size: 14px;
   padding: 4px; margin-right: -4px;
 }
-.clear-field-btn:hover,
-.clear-x:hover { opacity: 0.7; }
+.clear-field-btn:hover, .clear-x:hover { opacity: 0.7; }
 
 .search-buttons { display: flex; gap: 10px; }
 .btn-primary {
   flex: 1;
   display: flex; align-items: center; justify-content: center; gap: 8px;
-  padding: 14px;
+  padding: 15px;
   background: var(--gold);
   color: var(--dark-green);
   border: none; border-radius: 12px; cursor: pointer;
@@ -325,7 +396,7 @@ img.nav-logo {
 .btn-primary:disabled { opacity: 0.35; cursor: default; }
 .btn-primary svg { width: 18px; height: 18px; flex-shrink: 0; }
 .btn-icon {
-  width: 50px; height: 50px;
+  width: 52px; height: 52px;
   background: var(--card-green);
   border: 1px solid #9b804a40;
   border-radius: 12px; cursor: pointer;
@@ -357,7 +428,7 @@ img.nav-logo {
   margin-bottom: 10px;
   cursor: pointer;
   border: 1px solid #ffffff06;
-  box-shadow: 0 3px 6px #00000050;
+  box-shadow: 0 3px 8px #00000055;
   transition: opacity 0.12s;
   -webkit-tap-highlight-color: transparent;
 }
@@ -391,9 +462,9 @@ img.nav-logo {
   border-radius: 100px;
   font-size: 11px; font-weight: 600;
 }
-.badge-age { background: color-mix(in srgb, var(--badge-color) 18%, transparent); color: var(--badge-color); }
+.badge-age    { background: color-mix(in srgb, var(--badge-color) 18%, transparent); color: var(--badge-color); }
 .badge-romance { background: #D16B8F28; color: var(--rose); }
-.chevron { color: var(--gold); opacity: 0.6; font-size: 16px; align-self: center; flex-shrink: 0; }
+.chevron { color: var(--gold); opacity: 0.6; font-size: 18px; align-self: center; flex-shrink: 0; }
 
 /* ── State views (loading / empty / placeholder) ─────── */
 .state-view {
@@ -413,6 +484,8 @@ img.nav-logo {
   font-size: 12px; color: var(--gold); opacity: 0.65;
   margin-top: 24px;
 }
+
+/* ── Wisp orbs ────────────────────────────────────────── */
 .wisp-cluster {
   position: relative; width: 120px; height: 120px;
   display: flex; align-items: center; justify-content: center;
@@ -420,14 +493,11 @@ img.nav-logo {
 .wisp-orb {
   position: absolute;
   border-radius: 50%;
-  /* --size used by JS-generated orbs, --sz by static HTML orbs */
   width: var(--size, var(--sz, 40px)); height: var(--size, var(--sz, 40px));
   animation: pulse var(--dur, 3s) ease-in-out infinite alternate;
-  /* Default: green */
   background: radial-gradient(circle, #59b88555 0%, #59b88522 50%, transparent 70%);
   box-shadow: 0 0 calc(var(--size, var(--sz, 40px)) * 0.6) #59b88533;
 }
-/* Gold variant: inline --gold:1 style (JS) or .gold class (static HTML) */
 .wisp-orb.gold,
 .wisp-orb[style*="--gold:1"] {
   background: radial-gradient(circle, #9b804a55 0%, #9b804a22 50%, transparent 70%);
@@ -438,15 +508,15 @@ img.nav-logo {
   to   { transform: scale(1.15); opacity: 1; }
 }
 
-/* Loading spinner orbs */
+/* Loading cluster — matches iOS SearchTabView loadingView */
 .loading-cluster {
   display: flex; align-items: center; justify-content: center;
   position: relative; width: 100px; height: 100px;
 }
-.loading-cluster .wisp-orb:nth-child(1) { width:55px; height:55px; --dur:1.8s; background:radial-gradient(circle,#9b804a55 0%,#9b804a22 50%,transparent 70%); box-shadow:0 0 33px #9b804a33; }
-.loading-cluster .wisp-orb:nth-child(2) { width:30px; height:30px; --dur:2.3s; left:4px; top:58px; }
-.loading-cluster .wisp-orb:nth-child(3) { width:22px; height:22px; --dur:1.5s; left:70px; top:52px; background:radial-gradient(circle,#9b804a55 0%,#9b804a22 50%,transparent 70%); box-shadow:0 0 13px #9b804a33; }
-.loading-cluster .wisp-orb:nth-child(4) { width:16px; height:16px; --dur:2.8s; left:48px; top:0px; }
+.loading-cluster .wisp-orb:nth-child(1) { width:55px;height:55px;--dur:1.8s;background:radial-gradient(circle,#9b804a55 0%,#9b804a22 50%,transparent 70%);box-shadow:0 0 33px #9b804a33; }
+.loading-cluster .wisp-orb:nth-child(2) { width:30px;height:30px;--dur:2.3s;left:4px;top:58px; }
+.loading-cluster .wisp-orb:nth-child(3) { width:22px;height:22px;--dur:1.5s;left:70px;top:52px;background:radial-gradient(circle,#9b804a55 0%,#9b804a22 50%,transparent 70%);box-shadow:0 0 13px #9b804a33; }
+.loading-cluster .wisp-orb:nth-child(4) { width:16px;height:16px;--dur:2.8s;left:48px;top:0px; }
 
 /* ── Modal scroll container ───────────────────────────── */
 .modal-scroll {
@@ -454,28 +524,42 @@ img.nav-logo {
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
 }
-#info-content {
-  padding: 20px 20px 48px;
-}
+#info-content { padding: 20px 20px 48px; }
 
 /* ── Book detail ──────────────────────────────────────── */
-.detail-scroll {
-  flex: 1; overflow-y: auto;
-  -webkit-overflow-scrolling: touch;
-}
 .detail-header {
   background: #132A1F99;
   display: flex; justify-content: center;
-  padding: 24px 20px 20px;
-  min-height: 200px;
+  padding: 30px 20px 24px;
+  min-height: 220px;
   position: relative;
   overflow: hidden;
+}
+/* Wisp orbs behind the cover — matches iOS WispOrb in headerSection */
+.detail-header::before,
+.detail-header::after {
+  content: '';
+  position: absolute;
+  border-radius: 50%;
+  pointer-events: none;
+  animation: pulse 3s ease-in-out infinite alternate;
+}
+.detail-header::before {
+  width: 160px; height: 160px;
+  top: 50%; left: 50%; transform: translate(-50%, -30%);
+  background: radial-gradient(circle, #9b804a22 0%, #9b804a0a 50%, transparent 70%);
+}
+.detail-header::after {
+  width: 70px; height: 70px;
+  top: 20%; left: calc(50% - 100px);
+  background: radial-gradient(circle, #59b88520 0%, transparent 70%);
+  animation-duration: 4.2s;
 }
 .detail-cover-wrap {
   z-index: 1;
   width: 120px; height: 180px;
   border-radius: 8px; overflow: hidden;
-  box-shadow: 0 6px 24px #00000088;
+  box-shadow: 0 8px 28px #00000088;
   background: var(--card-green);
   display: flex; align-items: center; justify-content: center;
 }
@@ -499,23 +583,23 @@ img.nav-logo {
 .rating-card {
   flex: 1; background: var(--card-green);
   border-radius: 14px; padding: 14px 10px;
-  box-shadow: 0 3px 6px #00000050;
+  box-shadow: 0 3px 8px #00000055;
   display: flex; flex-direction: column; align-items: center; gap: 6px;
 }
 .rating-icon { font-size: 24px; }
 .rating-label { font-size: 12px; font-weight: 600; color: var(--cream); }
 .rating-sub { font-size: 10px; color: var(--cream); opacity: 0.6; }
 .detail-description {
-  font-size: 14px; color: var(--cream); opacity: 0.85; line-height: 1.6;
+  font-size: 14px; color: var(--cream); opacity: 0.85; line-height: 1.65;
 }
 .read-more-btn {
   background: none; border: none; cursor: pointer;
-  color: var(--gold); font-size: 12px; font-weight: 600;
+  color: var(--gold); font-size: 13px; font-weight: 600;
   padding: 6px 0; display: block; margin-top: 4px;
 }
 .details-table {
   background: var(--card-green); border-radius: 14px;
-  overflow: hidden; box-shadow: 0 3px 6px #00000050;
+  overflow: hidden; box-shadow: 0 3px 8px #00000055;
 }
 .detail-row {
   display: flex; justify-content: space-between; align-items: center;
@@ -543,9 +627,7 @@ img.nav-logo {
   display: flex; flex-direction: column; align-items: center;
   gap: 12px; padding: 8px 0 4px; text-align: center;
 }
-.info-logo {
-  width: 160px; height: auto; object-fit: contain;
-}
+.info-logo { width: 160px; height: auto; object-fit: contain; }
 .info-header h1 {
   font-family: Georgia, serif; font-size: 20px; font-weight: 700;
   color: var(--cream);
@@ -557,32 +639,26 @@ img.nav-logo {
   margin-bottom: 8px;
 }
 .info-section h2 svg { width: 15px; height: 15px; flex-shrink: 0; }
-.info-section p {
-  font-size: 14px; color: var(--cream); opacity: 0.82;
-  line-height: 1.65;
-}
+.info-section p { font-size: 14px; color: var(--cream); opacity: 0.82; line-height: 1.65; }
 .info-divider { border: none; border-top: 1px solid #9b804a20; }
-.attribution {
-  font-size: 12px; color: var(--cream); opacity: 0.55; line-height: 1.6;
-}
+.attribution { font-size: 12px; color: var(--cream); opacity: 0.55; line-height: 1.6; }
 
-/* ── Placeholder ──────────────────────────────────────── */
-#scan-fallback, .placeholder-content {
+/* ── Scan fallback ────────────────────────────────────── */
+#scan-fallback {
   display: flex; flex-direction: column;
   align-items: center; justify-content: center;
   text-align: center; gap: 10px;
   padding: 40px 32px;
+  flex: 1;
 }
 #scan-fallback h2 { font-family: Georgia, serif; font-size: 18px; color: var(--cream); }
 #scan-fallback p  { font-size: 14px; color: var(--cream); opacity: 0.6; line-height: 1.5; }
+
 /* Full-screen overlay shown while searching or on not-found error */
 #scan-result {
   position: absolute;
-  inset: 0;
-  z-index: 10;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  inset: 0; z-index: 10;
+  display: flex; align-items: center; justify-content: center;
   background: #000000bb;
   padding: 24px;
 }
@@ -593,54 +669,38 @@ img.nav-logo {
   border-radius: 20px;
   padding: 32px 24px 24px;
   text-align: center;
-  width: 100%;
-  max-width: 280px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 6px;
-  box-shadow: 0 8px 32px #00000060;
+  width: 100%; max-width: 290px;
+  display: flex; flex-direction: column;
+  align-items: center; gap: 6px;
+  box-shadow: 0 8px 40px #00000070;
 }
 .scan-status-title {
   font-family: Georgia, serif;
-  font-size: 17px;
-  font-weight: 700;
-  color: var(--cream);
-  margin-top: 8px;
+  font-size: 17px; font-weight: 700;
+  color: var(--cream); margin-top: 8px;
 }
 .scan-status-sub {
-  font-size: 13px;
-  color: var(--cream);
-  opacity: 0.7;
-  line-height: 1.5;
-  margin-bottom: 6px;
+  font-size: 13px; color: var(--cream); opacity: 0.7;
+  line-height: 1.5; margin-bottom: 6px;
 }
 .scan-status-actions {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  width: 100%;
-  margin-top: 6px;
+  display: flex; flex-direction: column;
+  gap: 8px; width: 100%; margin-top: 6px;
 }
 
-/* Persistent "Type ISBN" button in scanner area.
-   z-index 3 puts it above the camera overlay (z-index 2) but below the
-   scan-result card (z-index 10) so it's hidden during searching/not-found states. */
+/* "Type ISBN" pill button at bottom of scanner */
 .manual-isbn-btn {
   position: absolute;
-  bottom: 22px;
-  left: 50%;
-  transform: translateX(-50%);
+  bottom: 22px; left: 50%; transform: translateX(-50%);
   z-index: 3;
-  background: rgba(0, 0, 0, 0.62);
-  border: 1px solid rgba(155, 128, 74, 0.45);
+  background: rgba(0,0,0,0.62);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  border: 1px solid rgba(155,128,74,0.45);
   border-radius: 20px;
-  color: var(--cream);
-  opacity: 0.82;
-  font-size: 12px;
-  padding: 8px 20px;
-  cursor: pointer;
-  white-space: nowrap;
+  color: var(--cream); opacity: 0.82;
+  font-size: 12px; padding: 8px 20px;
+  cursor: pointer; white-space: nowrap;
   -webkit-tap-highlight-color: transparent;
   transition: opacity 0.15s;
 }
