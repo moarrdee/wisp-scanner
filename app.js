@@ -49,6 +49,11 @@ function startScanner() {
   fallback.classList.add('hidden');
   stopScanner();
 
+  // Remove any video/canvas elements Quagga left from a previous session.
+  // Without this, re-initialising injects new elements behind the stale ones,
+  // producing a black screen — the old canvas sits on top, the new video beneath.
+  area.querySelectorAll('video, canvas').forEach(el => el.remove());
+
   if (!navigator.mediaDevices?.getUserMedia) {
     showScanFallback('Camera not supported in this browser.');
     return;
@@ -67,7 +72,7 @@ function startScanner() {
       willReadFrequently: true,
     },
     decoder: {
-      readers: ['ean_reader'],   // ISBN barcodes are always EAN-13; fewer decoders = faster, fewer misreads
+      readers: ['ean_reader', 'ean_8_reader', 'upc_reader', 'upc_e_reader'],
     },
     locate: true,
     numOfWorkers: 0,   // Workers require SharedArrayBuffer which is blocked on iOS
@@ -415,8 +420,9 @@ function openDetail(book) {
 function closeDetail() {
   document.getElementById('view-detail').classList.add('hidden');
   lastScanned = null;
-  // If the user came from the scan tab, restart the camera so they can scan again
-  if (currentTab === 'scan') startScanner();
+  // Restart the camera after a short delay so the previous media track has time
+  // to fully release before Quagga requests a new one — prevents black screen.
+  if (currentTab === 'scan') setTimeout(startScanner, 300);
 }
 
 function detailHTML(book) {
