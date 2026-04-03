@@ -521,6 +521,31 @@ function renderResults(books) {
       badgesEl.innerHTML = `<span class="badge badge-age" style="--badge-color:${newColour}">${newIcon}${escHtml(newAge)}</span>${newRomance}`;
     });
   });
+
+  // Background: fetch descriptions for books that don't yet show a romance badge
+  // (categories alone often lack romance signals — description keywords are needed).
+  // Only fires for books with a /works/ key; capped at 5 per render to limit traffic.
+  let descFetchCount = 0;
+  books.forEach((book, i) => {
+    if (descFetchCount >= 5) return;
+    if (hasRomanticThemes(book)) return; // already showing romance — skip
+    if (!book.id?.startsWith('/works/')) return;
+    descFetchCount++;
+    fetchDescription(book.id).then(desc => {
+      if (!desc) return;
+      const enriched = Object.assign({}, currentResults[i], { description: desc });
+      if (!hasRomanticThemes(enriched)) return; // description didn't add romance
+      currentResults[i] = enriched;
+      const card = document.querySelector(`[data-card-idx="${i}"]`);
+      if (!card) return;
+      const badgesEl = card.querySelector('.book-badges');
+      if (!badgesEl) return;
+      const newAge    = ageRating(enriched);
+      const newColour = AGE_COLOURS[newAge] || '#9B804A';
+      const newIcon   = AGE_ICONS[newAge] || '';
+      badgesEl.innerHTML = `<span class="badge badge-age" style="--badge-color:${newColour}">${newIcon}${escHtml(newAge)}</span><span class="badge badge-romance">${HEART_SVG}Romance</span>`;
+    });
+  });
 }
 
 function renderPlaceholder() {
