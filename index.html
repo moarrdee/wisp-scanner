@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>Wisp Scanner</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="manifest" href="manifest.json">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
+  <meta name="theme-color" content="#132A1F">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Wisp Scanner">
+  <!-- Quagga2: EAN/UPC barcode scanning via canvas — works on iOS Safari + Chrome -->
+  <script src="https://unpkg.com/@ericblade/quagga2@1.8.2/dist/quagga.min.js"></script>
+</head>
+<body>
+  <div id="app">
+
+    <!-- ── Views wrapper ────────────────────────────────── -->
+    <div id="views">
+
+      <!-- Scan Tab -->
+      <div id="view-scan" class="view active">
+        <header class="nav-bar">
+          <img class="nav-logo" src="https://www.wispbookshop.com/uploads/b/83d087e4aa8e2de4459401d9bcf103ff53ee9d453751c4902ece251eb7bbef58/Wisp-Bookshop-Logo-3_1752237750.png" alt="Wisp Bookshop">
+          <button class="info-btn" onclick="showInfo()" aria-label="About">&#9432;</button>
+        </header>
+        <div id="scanner-area">
+          <!-- Quagga2 injects its own <video> and <canvas> elements here -->
+          <div class="scan-overlay">
+            <div class="scan-cutout"></div>
+            <div class="scan-instruction"><span>Align barcode within the frame</span></div>
+            <div id="scan-box">
+              <span class="corner tl"></span>
+              <span class="corner tr"></span>
+              <span class="corner bl"></span>
+              <span class="corner br"></span>
+              <div class="scan-line"></div>
+            </div>
+            <div class="scan-flash" id="scan-flash"><span>✦ Found it!</span></div>
+          </div>
+          <div id="scan-result" class="hidden"></div>
+        </div>
+        <div id="scan-fallback" class="hidden">
+          <div class="wisp-cluster">
+            <div class="wisp-orb gold" style="--size:80px;--dur:3.2s"></div>
+            <div class="wisp-orb" style="--size:40px;--dur:4.1s;left:56px;top:30px"></div>
+          </div>
+          <h2>Camera unavailable</h2>
+          <p>This device or browser doesn't support barcode scanning.<br>Use the Search tab to look up books by title, author, or ISBN.</p>
+          <button class="btn-primary" style="max-width:180px;margin-top:8px" onclick="switchTab('search')">Go to Search</button>
+        </div>
+      </div>
+
+      <!-- Search Tab -->
+      <div id="view-search" class="view">
+        <header class="nav-bar">
+          <img class="nav-logo" src="https://www.wispbookshop.com/uploads/b/83d087e4aa8e2de4459401d9bcf103ff53ee9d453751c4902ece251eb7bbef58/Wisp-Bookshop-Logo-3_1752237750.png" alt="Wisp Bookshop">
+          <button class="info-btn" onclick="showInfo()" aria-label="About">&#9432;</button>
+        </header>
+        <div class="search-form">
+          <div class="search-field">
+            <svg class="field-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+            <input id="input-title" type="text" placeholder="Book title" autocomplete="off" autocorrect="off" autocapitalize="words" oninput="onFieldInput(this)" onkeydown="onFieldKey(event,'title')">
+            <button class="clear-x hidden" onclick="clearField('input-title')" tabindex="-1">&#10005;</button>
+          </div>
+          <div class="search-field">
+            <svg class="field-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+            <input id="input-author" type="text" placeholder="Author name" autocomplete="off" autocorrect="off" autocapitalize="words" oninput="onFieldInput(this)" onkeydown="onFieldKey(event,'author')">
+            <button class="clear-x hidden" onclick="clearField('input-author')" tabindex="-1">&#10005;</button>
+          </div>
+          <div class="search-field">
+            <svg class="field-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="4" height="16"/><rect x="8" y="4" width="2" height="16"/><rect x="12" y="4" width="4" height="16"/><rect x="18" y="4" width="4" height="16"/></svg>
+            <input id="input-isbn" type="text" placeholder="ISBN" autocomplete="off" inputmode="numeric" oninput="onFieldInput(this)" onkeydown="onFieldKey(event,'isbn')">
+            <button class="clear-x hidden" onclick="clearField('input-isbn')" tabindex="-1">&#10005;</button>
+          </div>
+          <div class="search-buttons">
+            <button id="search-btn" class="btn-primary" onclick="performSearch()" disabled>
+              <svg id="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+              <span id="search-label">Search Books</span>
+            </button>
+            <button id="clear-btn" class="btn-icon hidden" onclick="clearSearch()" aria-label="Clear">&#8635;</button>
+          </div>
+        </div>
+        <div id="search-results"></div>
+      </div>
+
+    </div><!-- #views -->
+
+    <!-- Tab bar — inside #app so layout is correct -->
+    <nav class="tab-bar">
+      <button class="tab active" id="tab-scan" onclick="switchTab('scan')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="2" y="6" width="5" height="12" rx="1"/><rect x="9" y="6" width="2" height="12"/><rect x="13" y="6" width="4" height="12" rx="1"/><rect x="19" y="6" width="3" height="12"/></svg>
+        <span>Scan</span>
+      </button>
+      <button class="tab" id="tab-search" onclick="switchTab('search')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+        <span>Search</span>
+      </button>
+    </nav>
+
+  </div><!-- #app -->
+
+  <!-- Modals — outside views so they sit over everything -->
+  <div id="view-detail" class="modal hidden">
+    <header class="nav-bar">
+      <button class="back-btn" onclick="closeDetail()">&#8249; Back</button>
+      <span class="nav-title">Book Details</span>
+      <span style="width:44px"></span>
+    </header>
+    <div id="detail-content" class="modal-scroll"></div>
+  </div>
+
+  <div id="view-info" class="modal hidden">
+    <header class="nav-bar">
+      <span style="width:44px"></span>
+      <span class="nav-title">About</span>
+      <button class="done-btn" onclick="closeInfo()">Done</button>
+    </header>
+    <div id="info-content" class="modal-scroll"></div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
