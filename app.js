@@ -935,7 +935,21 @@ const TEEN_SUBJECTS = [
 const COMING_OF_AGE = ['coming-of-age fiction','coming of age fiction','coming-of-age','coming of age'];
 const GENRE_TAGS    = ['fantasy','science fiction','romance','thriller','mystery','horror','adventure'];
 
+// ── Manual overrides ─────────────────────────────────────────────────────────
+// Keyed by "normalised title|first author" for books where Open Library data
+// produces an incorrect rating. Values are applied before any inference logic.
+const RATING_OVERRIDES = {
+  'a court of wings and ruin|sarah j. maas': { age: 'Young Adult', romance: true },
+};
+
+function overrideKey(book) {
+  const title  = (book.title   || '').toLowerCase().trim();
+  const author = (book.authors?.[0] || '').toLowerCase().trim();
+  return `${title}|${author}`;
+}
+
 function hasRomanticThemes(book) {
+  if (RATING_OVERRIDES[overrideKey(book)]?.romance) return true;
   const cats = (book.categories || []).join(' ').toLowerCase();
   if (ROMANCE_SIGNALS.some(s => cats.includes(s))) return true;
   const desc = (book.description || '').toLowerCase();
@@ -944,6 +958,8 @@ function hasRomanticThemes(book) {
 }
 
 function ageRating(book) {
+  const override = RATING_OVERRIDES[overrideKey(book)];
+  if (override?.age) return override.age;
   const cats = (book.categories || []).join(' ').toLowerCase();
   const desc = (book.description || '').toLowerCase();
   const c = s => cats.includes(s);
