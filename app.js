@@ -1635,24 +1635,49 @@ function bookFromGoogleVolume(item) {
 
 // Queries the Google Books API. Returns [] on any failure so it is always
 // safe to use as a best-effort fallback without breaking the main flow.
-// Retries up to 3 times on 429 (keyless rate-limit) with exponential back-off
-// (1 s then 2 s). Fired in parallel with OL searches for ISBN lookups so the
-// result is usually available the moment OL finishes.
+// Retries up to 3 times on 429 or transient network errors with exponential
+// back-off (1 s, 2 s). Fired in parallel with OL searches for ISBN lookups.
 async function fetchFromGoogleBooks(query, signal = null) {
+  const qs = new URLSearchParams({ q: query, maxResults: '10' });
+  if (GB_KEY) qs.set('key', GB_KEY);
+  const url = `${GB_BASE}?${qs}`;
+
   for (let attempt = 1; attempt <= 3; attempt++) {
+    if (signal?.aborted) return [];
+
+    // Named handler so it can be explicitly removed after success/timeout.
+    // { once: true } handles the abort path (auto-removes after signal fires);
+    // the explicit removeEventListener calls below handle the success and
+    // timeout paths — both are needed so no listener lingers on the signal.
+    const ctrl    = new AbortController();
+    const onAbort = () => ctrl.abort();
+    signal?.addEventListener('abort', onAbort, { once: true });
+    const timer = setTimeout(() => ctrl.abort(), 10000);
+
+    let res;
     try {
-      const qs = new URLSearchParams({ q: query, maxResults: '10' });
-      if (GB_KEY) qs.set('key', GB_KEY);
-      const ctrl  = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 10000);
-      signal?.addEventListener('abort', () => ctrl.abort(), { once: true });
-      const res = await fetch(`${GB_BASE}?${qs}`, { signal: ctrl.signal });
+      res = await fetch(url, { signal: ctrl.signal });
+    } catch (e) {
+      // Bug fix: catch is now OUTSIDE the success path and INSIDE the loop so
+      // transient network errors (including AbortError from our own 10 s timer)
+      // can be retried. Previously `catch { return []; }` was inside the loop
+      // body and exited the function immediately on the first error, making the
+      // retry logic on attempts 2 and 3 completely unreachable.
       clearTimeout(timer);
-      if (res.status === 429) {
-        if (attempt < 3) { await sleep(attempt * 1000); continue; }
-        return [];
-      }
-      if (!res.ok) return [];
+      signal?.removeEventListener('abort', onAbort);
+      if (e.name === 'AbortError' && signal?.aborted) return []; // user cancelled
+      if (attempt < 3) { await sleep(attempt * 1000); continue; } // transient — retry
+      return [];
+    }
+    clearTimeout(timer);
+    signal?.removeEventListener('abort', onAbort);
+
+    if (res.status === 429) {
+      if (attempt < 3) { await sleep(attempt * 1000); continue; }
+      return [];
+    }
+    if (!res.ok) return [];
+    try {
       const json = await res.json();
       return (json.items || []).map(bookFromGoogleVolume).filter(Boolean);
     } catch { return []; }
