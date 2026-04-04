@@ -479,7 +479,7 @@ async function performSearch() {
     if (searchPending !== controller) return;
     // ISBN path: searchByISBN doesn't enrich internally, so enrich here.
     // Query path: searchByQuery already enriches before caching; skip to avoid redundant calls.
-    if (isbn) books = await enrichWithDescriptions(books);
+    if (isbn) books = await enrichWithDescriptions(books, controller.signal);
     if (searchPending !== controller) return;
     renderResults(books);
   } catch (e) {
@@ -517,7 +517,7 @@ function setSearchLoading(on) {
 // Mirrors iOS enrichSearchResults(): no external race timeout — fetchDescription
 // already has a 15 s internal abort so this never blocks indefinitely.
 // Called inside searchByQuery/searchByISBN so cached results include descriptions.
-async function enrichWithDescriptions(books) {
+async function enrichWithDescriptions(books, signal = null) {
   return Promise.all(books.map(async book => {
     if (book.description && book.coverURL) return book; // already complete
     // Phase 1: OL works endpoint for description
@@ -536,7 +536,7 @@ async function enrichWithDescriptions(books) {
         : book.authors[0]
           ? `intitle:"${book.title}" inauthor:"${book.authors[0]}"`
           : `"${book.title}"`;
-      const gbResults = await fetchFromGoogleBooks(gbQuery);
+      const gbResults = await fetchFromGoogleBooks(gbQuery, signal);
       if (gbResults.length) {
         const gb = gbResults[0];
         return Object.assign({}, book, {
@@ -872,7 +872,7 @@ function toggleDesc() {
     el.textContent = el.dataset.full;
     btn.textContent = 'Show less';
   } else {
-    el.textContent = el.dataset.full.slice(0, 400) + '…';
+    el.textContent = el.dataset.full.slice(0, 400) + '\u2026';
     btn.textContent = 'Read more';
   }
 }
@@ -1266,7 +1266,7 @@ async function searchByISBN(isbn, signal = null) {
     // (Deluxe, Collector's, Special Edition, etc.) and the record is missing a
     // cover or has sparse categories, search for the base title to fill gaps.
     // We keep the original title, id, and ISBN so catalogue links stay correct.
-    book = await enrichSpecialEdition(book);
+    book = await enrichSpecialEdition(book, signal);
 
     isbnCache[isbn] = isbnCache[candidate] = book;
     return [book];
@@ -1278,7 +1278,7 @@ async function searchByISBN(isbn, signal = null) {
   const [_gbResults13, _gbResults10] = await Promise.all([_gb13, _gb10]);
   const gbBook = _gbResults13[0] ?? _gbResults10[0] ?? null;
   if (gbBook) {
-    const book = await enrichSpecialEdition(gbBook);
+    const book = await enrichSpecialEdition(gbBook, signal);
     isbnCache[isbn] = book;
     return [book];
   }
@@ -1365,7 +1365,7 @@ const EDITION_WORD_RE = /\b(deluxe|limited|collector[\u2019']?s?|special|anniver
 // we search Open Library for the base title + author and merge in the
 // cover, subjects, page count, and /works/ id from the best matching result.
 // We always keep the original title, id, and ISBN so catalogue links stay correct.
-async function enrichSpecialEdition(book) {
+async function enrichSpecialEdition(book, signal = null) {
   const lc = book.title.toLowerCase();
 
   // Quick check — does the title contain any edition word plus "edition"?
@@ -1408,10 +1408,15 @@ async function enrichSpecialEdition(book) {
     const q = author ? `${baseTitle} ${author}` : baseTitle;
     const params = new URLSearchParams({ q, fields: SEARCH_FIELDS, limit: '5' });
 
+    // 8 s internal timeout; also forwards the caller's cancellation signal so
+    // enrichment aborts immediately if the user clears the search or navigates away.
     const controller = new AbortController();
+    const onAbort = () => controller.abort();
+    signal?.addEventListener('abort', onAbort, { once: true });
     const timer = setTimeout(() => controller.abort(), 8000);
     const res = await fetch(`${SEARCH_BASE}?${params}`, { signal: controller.signal });
     clearTimeout(timer);
+    signal?.removeEventListener('abort', onAbort);
     if (!res.ok) return book;
 
     const json  = await res.json();
@@ -1514,7 +1519,7 @@ async function searchByQuery(title, author, signal = null) {
       const json = await res.json();
       const raw = (json.docs || []).map(bookFromDoc).filter(Boolean);
       if (raw.length) {
-        const books = await enrichWithDescriptions(raw);
+        const books = await enrichWithDescriptions(raw, signal);
         queryCache[authorKey] = queryCache[cacheKey] = books;
         return books;
       }
@@ -1563,7 +1568,7 @@ async function searchByQuery(title, author, signal = null) {
   // Enrich with descriptions before caching — mirrors iOS search() which calls
   // enrichSearchResults() before storing results. Cache always holds enriched books
   // so cache hits render with correct age/romance ratings immediately.
-  books = await enrichWithDescriptions(books);
+  books = await enrichWithDescriptions(books, signal);
   queryCache[cacheKey] = books;
   return books;
 }
