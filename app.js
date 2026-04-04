@@ -1200,7 +1200,13 @@ async function searchByISBN(isbn, signal = null) {
   // parallel and will have a result ready (or nearly ready) by the time the OL
   // loop finishes — eliminating the sequential delay of the old fallback.
   const _gb13 = fetchFromGoogleBooks(`isbn:${isbn}`, signal);
-  const _isbn10Cand = candidates.find(c => c.length === 10);
+  // Only fire an isbn-10 GB query when the candidates list actually contains a
+  // genuine ISBN-10 (exactly 10 alphanumeric chars, distinct from the original
+  // ISBN). `c.length === 10` is sufficient here because buildISBNCandidates only
+  // ever adds ISBN-10s (via isbn13ToISBN10) or 12/13-digit UPC/EAN variants —
+  // nothing else reaches length 10. The `!== isbn` guard prevents a duplicate
+  // request when the scanned code was already an ISBN-10.
+  const _isbn10Cand = candidates.find(c => c.length === 10 && /^[0-9]{9}[0-9X]$/i.test(c));
   const _gb10 = (_isbn10Cand && _isbn10Cand !== isbn)
     ? fetchFromGoogleBooks(`isbn:${_isbn10Cand}`, signal)
     : Promise.resolve([]);
