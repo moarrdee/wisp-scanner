@@ -1194,6 +1194,17 @@ async function searchByISBN(isbn, signal = null) {
     if (isbnCache[c]) { isbnCache[isbn] = isbnCache[c]; return [isbnCache[c]]; }
   }
 
+  // Fire Google Books isbn: queries immediately, in parallel with the OL searches.
+  // For books already in OL (most books) the OL result arrives first and GB is
+  // unused. For new releases not yet indexed by OL, GB has been running in
+  // parallel and will have a result ready (or nearly ready) by the time the OL
+  // loop finishes — eliminating the sequential delay of the old fallback.
+  const _gb13 = fetchFromGoogleBooks(`isbn:${isbn}`, signal);
+  const _isbn10Cand = candidates.find(c => c.length === 10);
+  const _gb10 = (_isbn10Cand && _isbn10Cand !== isbn)
+    ? fetchFromGoogleBooks(`isbn:${_isbn10Cand}`, signal)
+    : Promise.resolve([]);
+
   // For each candidate ISBN, fire both endpoints simultaneously and wait for both
   // to settle (or timeout). We then merge the best fields from each:
   //   - Search index: always returns a /works/ key (enables description fetch)
@@ -1255,10 +1266,13 @@ async function searchByISBN(isbn, signal = null) {
     return [book];
   }
 
-  // All OL candidates failed — try Google Books (strong coverage for new releases)
-  const gbResults = await fetchFromGoogleBooks(`isbn:${isbn}`, signal);
-  if (gbResults.length) {
-    const book = await enrichSpecialEdition(gbResults[0]);
+  // All OL candidates failed — await the already-in-flight GB requests.
+  // They started in parallel at the top of this function, so they've been
+  // running concurrently with the OL searches and should be ready by now.
+  const [_gbResults13, _gbResults10] = await Promise.all([_gb13, _gb10]);
+  const gbBook = _gbResults13[0] ?? _gbResults10[0] ?? null;
+  if (gbBook) {
+    const book = await enrichSpecialEdition(gbBook);
     isbnCache[isbn] = book;
     return [book];
   }
@@ -1621,9 +1635,11 @@ function bookFromGoogleVolume(item) {
 
 // Queries the Google Books API. Returns [] on any failure so it is always
 // safe to use as a best-effort fallback without breaking the main flow.
-// Retries once on 429 (keyless rate-limit) with a short back-off.
+// Retries up to 3 times on 429 (keyless rate-limit) with exponential back-off
+// (1 s then 2 s). Fired in parallel with OL searches for ISBN lookups so the
+// result is usually available the moment OL finishes.
 async function fetchFromGoogleBooks(query, signal = null) {
-  for (let attempt = 1; attempt <= 2; attempt++) {
+  for (let attempt = 1; attempt <= 3; attempt++) {
     try {
       const qs = new URLSearchParams({ q: query, maxResults: '10' });
       if (GB_KEY) qs.set('key', GB_KEY);
@@ -1633,7 +1649,7 @@ async function fetchFromGoogleBooks(query, signal = null) {
       const res = await fetch(`${GB_BASE}?${qs}`, { signal: ctrl.signal });
       clearTimeout(timer);
       if (res.status === 429) {
-        if (attempt < 2) { await sleep(1000); continue; }
+        if (attempt < 3) { await sleep(attempt * 1000); continue; }
         return [];
       }
       if (!res.ok) return [];
