@@ -528,9 +528,28 @@ function setSearchLoading(on) {
 // Called inside searchByQuery/searchByISBN so cached results include descriptions.
 async function enrichWithDescriptions(books) {
   return Promise.all(books.map(async book => {
-    if (book.description || !book.id?.startsWith('/works/')) return book;
-    const desc = await fetchDescription(book.id);
-    return desc ? Object.assign({}, book, { description: desc }) : book;
+    if (book.description) return book;
+    // Phase 1: OL works endpoint
+    if (book.id?.startsWith('/works/')) {
+      const desc = await fetchDescription(book.id);
+      if (desc) return Object.assign({}, book, { description: desc });
+    }
+    // Phase 2: Google Books via ISBN — fills description + maturity signals for
+    // books where OL has no works description (common for new releases)
+    if (book.isbn) {
+      const gbResults = await fetchFromGoogleBooks(`isbn:${book.isbn}`);
+      if (gbResults.length) {
+        const gb = gbResults[0];
+        return Object.assign({}, book, {
+          description:    gb.description    ?? book.description,
+          // Supplement sparse OL subjects with Google Books BISAC categories
+          categories:     book.categories.length ? book.categories : (gb.categories.length ? gb.categories : []),
+          maturityRating: gb.maturityRating === 'MATURE' ? 'MATURE' : book.maturityRating,
+          coverURL:       book.coverURL ?? gb.coverURL,
+        });
+      }
+    }
+    return book;
   }));
 }
 
@@ -1123,7 +1142,13 @@ function ageRange(age) {
 const SEARCH_BASE  = 'https://openlibrary.org/search.json';
 const BOOKS_BASE   = 'https://openlibrary.org/api/books';
 const WORKS_BASE   = 'https://openlibrary.org';
-const SEARCH_FIELDS = 'key,title,author_name,subject,cover_i,number_of_pages_median,first_publish_year,publisher';
+const SEARCH_FIELDS = 'key,title,author_name,subject,cover_i,number_of_pages_median,first_publish_year,publisher,isbn';
+
+// ── Google Books API (fallback for new releases missing from Open Library) ────
+const GB_BASE = 'https://www.googleapis.com/books/v1/volumes';
+// Free API key from console.cloud.google.com/apis/library/books.googleapis.com
+// Leave empty to use keyless requests (adequate for a single-shop scanner)
+const GB_KEY  = '';
 
 async function fetchWithRetry(url, maxAttempts = 3, signal = null) {
   let attempt = 0;
@@ -1232,6 +1257,13 @@ async function searchByISBN(isbn, signal = null) {
     return [book];
   }
 
+  // All OL candidates failed — try Google Books (strong coverage for new releases)
+  const gbResults = await fetchFromGoogleBooks(`isbn:${isbn}`, signal);
+  if (gbResults.length) {
+    const book = await enrichSpecialEdition(gbResults[0]);
+    isbnCache[isbn] = book;
+    return [book];
+  }
   throw new FetchError('No books found. Try a different search.');
 }
 
@@ -1492,7 +1524,18 @@ async function searchByQuery(title, author, signal = null) {
     }
   }
 
-  if (!books.length) throw new Error('No books found. Try a different search.');
+  if (!books.length) {
+    // OL returned nothing — try Google Books for new releases not yet indexed
+    const gbQuery = title && author
+      ? `intitle:${title}+inauthor:${author}`
+      : title ? `intitle:${title}` : `inauthor:${author}`;
+    const gbResults = await fetchFromGoogleBooks(gbQuery, signal);
+    if (gbResults.length) {
+      queryCache[cacheKey] = gbResults;
+      return gbResults;
+    }
+    throw new Error('No books found. Try a different search.');
+  }
   // Enrich with descriptions before caching — mirrors iOS search() which calls
   // enrichSearchResults() before storing results. Cache always holds enriched books
   // so cache hits render with correct age/romance ratings immediately.
@@ -1544,7 +1587,49 @@ function bookFromDoc(doc) {
     publishedDate: doc.first_publish_year ? String(doc.first_publish_year) : null,
     publisher:     doc.publisher?.[0] ?? null,
     coverURL:      doc.cover_i ? `https://covers.openlibrary.org/b/id/${doc.cover_i}-M.jpg` : null,
+    isbn:          (doc.isbn || [])[0] ?? null,
   };
+}
+
+// Maps a Google Books volume item to the app's internal book format.
+function bookFromGoogleVolume(item) {
+  const info = item?.volumeInfo;
+  if (!info?.title) return null;
+  const ids    = info.industryIdentifiers || [];
+  const isbn13 = ids.find(i => i.type === 'ISBN_13')?.identifier ?? null;
+  const isbn10 = ids.find(i => i.type === 'ISBN_10')?.identifier ?? null;
+  const isbn   = isbn13 ?? isbn10 ?? null;
+  const thumb  = info.imageLinks?.thumbnail ?? info.imageLinks?.smallThumbnail ?? null;
+  return {
+    id:            isbn ? `/isbn/${isbn}` : `/gb/${item.id}`,
+    title:         info.title,
+    authors:       info.authors || [],
+    description:   info.description || null,
+    categories:    info.categories || [],
+    maturityRating: info.maturityRating || 'NOT_MATURE',
+    pageCount:     info.pageCount    ?? null,
+    publishedDate: info.publishedDate ?? null,
+    publisher:     info.publisher    ?? null,
+    coverURL:      thumb ? thumb.replace('http:', 'https:') : null,
+    isbn,
+  };
+}
+
+// Queries the Google Books API. Returns [] on any failure so it is always
+// safe to use as a best-effort fallback without breaking the main flow.
+async function fetchFromGoogleBooks(query, signal = null) {
+  try {
+    const qs = new URLSearchParams({ q: query, maxResults: '10', printType: 'books' });
+    if (GB_KEY) qs.set('key', GB_KEY);
+    const ctrl  = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 10000);
+    signal?.addEventListener('abort', () => ctrl.abort(), { once: true });
+    const res = await fetch(`${GB_BASE}?${qs}`, { signal: ctrl.signal });
+    clearTimeout(timer);
+    if (!res.ok) return [];
+    const json = await res.json();
+    return (json.items || []).map(bookFromGoogleVolume).filter(Boolean);
+  } catch { return []; }
 }
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
