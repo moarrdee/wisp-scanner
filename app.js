@@ -338,7 +338,7 @@ function showManualISBN() {
       <p class="scan-status-title">Enter ISBN</p>
       <p class="scan-status-sub">Type or paste the 10 or 13‑digit ISBN from the back of the book.</p>
       <input id="manual-isbn-input" type="text" inputmode="numeric"
-        placeholder="e.g. 9781649376565"
+        placeholder="e.g. 9781035049417"
         autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false"
         onkeydown="if(event.key==='Enter')submitManualISBN()"
         style="width:100%;padding:12px 14px;border-radius:10px;border:1px solid #9b804a60;background:#132A1F;color:#F2EDE3;font-size:16px;margin-top:8px;outline:none;text-align:center;letter-spacing:1px;">
