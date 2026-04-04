@@ -477,8 +477,9 @@ async function performSearch() {
     } else {
       books = await searchByQuery(t, a, controller.signal);
     }
+    if (searchPending !== controller) return;
     books = await enrichWithDescriptions(books);
-    if (searchPending !== controller) return; // new search started while fetching descriptions
+    if (searchPending !== controller) return;
     renderResults(books);
   } catch (e) {
     if (e.name === 'AbortError') return;
@@ -514,6 +515,24 @@ function setSearchLoading(on) {
   }
 }
 
+// Fetch descriptions for all books in parallel before rendering so that
+// rating signals that only appear in the description (e.g. "play club",
+// "dark obsession") produce the correct badge immediately — no post-render patch.
+// A per-book 6 s timeout prevents a single slow OL response from blocking the
+// entire results list; those books fall back to the lazy patch loop in renderResults.
+// Fetch descriptions for all books in parallel so that ageRating() and
+// hasRomanticThemes() have the full description text when cards render.
+// Mirrors iOS enrichSearchResults(): no external race timeout — fetchDescription
+// already has a 15 s internal abort so this never blocks indefinitely.
+// Called inside searchByQuery/searchByISBN so cached results include descriptions.
+async function enrichWithDescriptions(books) {
+  return Promise.all(books.map(async book => {
+    if (book.description || !book.id?.startsWith('/works/')) return book;
+    const desc = await fetchDescription(book.id);
+    return desc ? Object.assign({}, book, { description: desc }) : book;
+  }));
+}
+
 function renderResults(books) {
   currentResults = books;
   const el = document.getElementById('search-results');
@@ -541,24 +560,46 @@ function renderResults(books) {
   // the richer description and categories from the canonical edition.
   // Runs after the initial render so it never delays showing results.
   const snapshotResults = books;
+
+  // Helper: re-evaluate and patch a card's badge row with the latest book data.
+  function patchCardBadges(i, enriched) {
+    if (currentResults !== snapshotResults) return;
+    currentResults[i] = enriched;
+    const card = document.querySelector(`[data-card-idx="${i}"]`);
+    if (!card) return;
+    const badgesEl = card.querySelector('.book-badges');
+    if (!badgesEl) return;
+    const newAge    = ageRating(enriched);
+    const newColour = AGE_COLOURS[newAge] || '#9B804A';
+    const newIcon   = AGE_ICONS[newAge] || '';
+    const newRomance = hasRomanticThemes(enriched)
+      ? `<span class="badge badge-romance">${HEART_SVG}Romance</span>` : '';
+    badgesEl.innerHTML = `<span class="badge badge-age" style="--badge-color:${newColour}">${newIcon}${escHtml(newAge)}</span>${newRomance}`;
+  }
+
   books.forEach((book, i) => {
     const lc = book.title.toLowerCase();
-    if (!EDITION_WORD_RE.test(lc) || !lc.includes('edition') || book.description) return;
+    // Run enrichment for all special editions, even those with a description already loaded.
+    // enrichSpecialEdition merges BASE EDITION categories (e.g. "dark romance") which are
+    // needed for correct age/romance ratings — the edition's own sparse record often lacks them.
+    if (!EDITION_WORD_RE.test(lc) || !lc.includes('edition')) return;
     enrichSpecialEdition(book).then(enriched => {
       if (enriched === book) return; // nothing changed
-      if (currentResults !== snapshotResults) return; // new search has started — don't corrupt it
-      currentResults[i] = enriched; // update so detail view gets richer data on tap
-      // Patch the badge row in the already-rendered card
-      const card = document.querySelector(`[data-card-idx="${i}"]`);
-      if (!card) return;
-      const badgesEl = card.querySelector('.book-badges');
-      if (!badgesEl) return;
-      const newAge    = ageRating(enriched);
-      const newColour = AGE_COLOURS[newAge] || '#9B804A';
-      const newIcon   = AGE_ICONS[newAge] || '';
-      const newRomance = hasRomanticThemes(enriched)
-        ? `<span class="badge badge-romance">${HEART_SVG}Romance</span>` : '';
-      badgesEl.innerHTML = `<span class="badge badge-age" style="--badge-color:${newColour}">${newIcon}${escHtml(newAge)}</span>${newRomance}`;
+      patchCardBadges(i, enriched);
+    });
+  });
+
+  // Description lazy-load: fetch descriptions for all books after the initial render.
+  // Results show immediately with subject-tag-based ratings; cards are patched to the
+  // correct rating once the description arrives. No hard timeout — fetchDescription
+  // allows up to 15 s, so books like "Caught Up" (signals only in description, not
+  // subject tags) reliably receive their Mature / Romance rating without a race condition.
+  books.forEach((book, i) => {
+    if (book.description || !book.id?.startsWith('/works/')) return;
+    fetchDescription(book.id).then(desc => {
+      if (!desc || currentResults !== snapshotResults) return;
+      const enriched = Object.assign({}, book, { description: desc });
+      patchCardBadges(i, enriched);
     });
   });
 
@@ -897,6 +938,17 @@ const DESC_ROMANCE_SIGNALS = [
   'undeniable attraction','undeniable chemistry','irresistible','desire for him',
   'desire for her','yearning for','longing for','wants him','wants her',
   'tension between them','pull between','magnetic pull','pull toward',
+  // dark / obsessive romance — also overlap with DARK_ADULT_ROMANCE_DESC for Mature rating
+  'dark obsession','walking red flag','seduction','seduce',
+  // dark fantasy / adult content blurb phrases — overlap with DARK_ADULT_ROMANCE_DESC
+  'darkest fantasies','willing body',
+  // Explicit consensual sexual content — indicates both romance AND mature content.
+  // These appear in dark romance / high-heat blurbs and signal romantic + sexual themes.
+  // NOTE: non-consensual terms (rape, sexual assault, etc.) are intentionally excluded
+  // here; they appear only in MATURE_DESC_SIGNALS below since assault is not romantic.
+  'bdsm','consensual non-consent','cnc kink',
+  // dark romance sub-genre labels that signal both romantic and mature themes
+  'mafia romance','cartel romance','monster romance','villain romance','stalker romance',
 ];
 const EROTICA_TERMS = [
   'erotica','erotic fiction','erotic romance','erotic literature',
@@ -904,7 +956,64 @@ const EROTICA_TERMS = [
   'sexually explicit','explicit sexual',
 ];
 const EXPLICIT_ROMANCE = ['dark romance','steamy romance','explicit romance','erotic romance novels'];
-const EXPLICIT_DESC    = ['explicit sex','graphic sexual','explicit sexual content','sexually explicit','graphic sex scenes'];
+const EXPLICIT_DESC    = [
+  'explicit sex','graphic sexual','explicit sexual content','sexually explicit','graphic sex scenes',
+  // BDSM and kink — explicit consensual sexual content; also signals romance (see DESC_ROMANCE_SIGNALS)
+  'bdsm','bondage and discipline','dominance and submission',
+];
+// ── Mature-only description signals ──────────────────────────────────────────
+// Phrases that indicate 18+ content based on violence, assault, abuse, trauma,
+// or substance use — NOT romantic in nature. A book may receive a Mature rating
+// from these signals WITHOUT a Romance flag. Contrast with DESC_ROMANCE_SIGNALS
+// (romantic themes) and EXPLICIT_DESC / EXPLICIT_ROMANCE (explicit sexual content
+// which signals both Mature AND Romance).
+//
+// Sourced from MPAA (R/NC-17), ESRB (M/AO), and book content-warning conventions:
+//   MPAA R: intense violence, drug abuse, adult themes
+//   MPAA NC-17: graphic violence, prolonged sexual content, aberrational behavior
+//   ESRB M: intense violence, blood & gore, sexual violence
+//   ESRB AO: strong sexual content, real gambling, intense/graphic violence
+const MATURE_DESC_SIGNALS = [
+  // Sexual violence — Mature ONLY, not romantic
+  'sexual assault','sexual violence','rape','raped','sexual abuse',
+  'molestation','child molestation','sexual molestation',
+  'incest','grooming','coerced','coercion',
+  'sex trafficking','human trafficking',
+  'non-consensual','nonconsensual','dubious consent',
+  'noncon','non-con','dubcon','dub-con',
+  // Physical violence and gore (MPAA R/NC-17, ESRB M/AO)
+  'graphic violence','intense violence','brutal violence',
+  'gore','blood and gore','extreme gore','body horror',
+  'torture','graphic torture','on-page torture',
+  'mutilation','dismemberment','decapitation',
+  // Abuse (non-sexual)
+  'child abuse','physical abuse','domestic violence','domestic abuse',
+  'abuse depicted','abuse on page',
+  // Suicide and self-harm (common content warning in books)
+  'suicide','suicidal','suicidal ideation','self-harm','self harm','self-mutilation',
+  // Substance abuse (MPAA R trigger)
+  'drug abuse','drug addiction','substance abuse','substance use disorder',
+  'overdose','heroin','opioid addiction',
+  // General mature content signals that appear in blurbs
+  'graphic content','disturbing content','disturbing themes',
+  'not for sensitive readers','mature audiences','mature readers',
+  'reader discretion','trigger warning',
+  '18+','18 and over','adults only',
+];
+// Category/subject-tag level signals for violence and assault — distinct from
+// erotica category signals but equally indicative of Mature (18+) content.
+const MATURE_SUBJECT_TERMS = [
+  'rape','sexual abuse','sexual assault','sexual violence','incest',
+  'domestic violence','child abuse','child sexual abuse',
+  'snuff fiction','extreme horror','splatterpunk',
+];
+// Dark romance / adult content description phrases that overlap with romance themes.
+// These appear in blurbs for explicit adult fiction and indicate Mature content.
+// Some also appear in DESC_ROMANCE_SIGNALS (e.g. 'dark obsession', 'walking red flag').
+const DARK_ADULT_ROMANCE_DESC = [
+  'dark obsession','walking red flag','play club','sex club',
+  'darkness and depravity','darkest fantasies','willing body',
+];
 const KIDS_SUBJECTS    = [
   'picture books','picture book','board books','board book','baby books',
   'toddler books','toddler','early readers','early reader','easy readers',
@@ -939,7 +1048,7 @@ const GENRE_TAGS    = ['fantasy','science fiction','romance','thriller','mystery
 // Keyed by "normalised title|first author" for books where Open Library data
 // produces an incorrect rating. Values are applied before any inference logic.
 const RATING_OVERRIDES = {
-  'a court of wings and ruin|sarah j. maas':    { age: 'Young Adult', romance: true },
+  'a court of wings and ruin|sarah j. maas':      { age: 'Young Adult', romance: true },
   'a court of frost and starlight|sarah j. maas': { romance: true },
 };
 
@@ -967,10 +1076,13 @@ function ageRating(book) {
   const d = s => desc.includes(s);
 
   if (book.maturityRating === 'MATURE') return 'Mature (18+)';
-  if (EROTICA_TERMS.some(c))    return 'Mature (18+)';
-  if (EXPLICIT_ROMANCE.some(c)) return 'Mature (18+)';
-  if (EXPLICIT_ROMANCE.some(d)) return 'Mature (18+)';
-  if (EXPLICIT_DESC.some(d))    return 'Mature (18+)';
+  if (EROTICA_TERMS.some(c))              return 'Mature (18+)';
+  if (MATURE_SUBJECT_TERMS.some(c))       return 'Mature (18+)';
+  if (EXPLICIT_ROMANCE.some(c))           return 'Mature (18+)';
+  if (EXPLICIT_ROMANCE.some(d))           return 'Mature (18+)';
+  if (EXPLICIT_DESC.some(d))             return 'Mature (18+)';
+  if (MATURE_DESC_SIGNALS.some(d))        return 'Mature (18+)';
+  if (DARK_ADULT_ROMANCE_DESC.some(d))   return 'Mature (18+)';
 
   // Category-level romance guard — prevents Kids/MG being assigned for books
   // tagged as romance. Description-based romance is checked via hasRomanticThemes
@@ -1208,8 +1320,11 @@ async function enrichSpecialEdition(book) {
   // Quick check — does the title contain any edition word plus "edition"?
   if (!EDITION_WORD_RE.test(lc) || !lc.includes('edition')) return book;
 
-  // Only enrich if something useful is missing — avoids unnecessary API calls
-  if (book.coverURL && book.categories.length > 5) return book;
+  // Only enrich if something useful is missing — avoids unnecessary API calls.
+  // Always enrich when description is null: special/collector's editions often have
+  // sparse works records; the base edition carries richer description + subject tags
+  // (e.g. "dark romance") that drive accurate age/romance detection.
+  if (book.coverURL && book.categories.length > 5 && book.description) return book;
 
   // Derive the base title by progressively stripping edition qualifiers.
   // We handle three common patterns:
@@ -1325,21 +1440,6 @@ function isbn13ToISBN10(isbn13) {
   return nine + (check === 10 ? 'X' : String(check));
 }
 
-// Fetches descriptions for all books in parallel before rendering.
-// Runs concurrently with a 2.5 s ceiling — books that don't respond in time
-// render without a description (still correct for age/romance signals that
-// come from subjects). Total latency ≈ max(individual fetch times), not sum.
-async function enrichWithDescriptions(books) {
-  return Promise.all(books.map(async book => {
-    if (book.description || !book.id?.startsWith('/works/')) return book;
-    const desc = await Promise.race([
-      fetchDescription(book.id),
-      new Promise(r => setTimeout(() => r(null), 2500)),
-    ]);
-    return desc ? Object.assign({}, book, { description: desc }) : book;
-  }));
-}
-
 async function searchByQuery(title, author, signal = null) {
   const params = new URLSearchParams();
   if (title && author) { params.set('title', title); params.set('author', author); }
@@ -1361,8 +1461,9 @@ async function searchByQuery(title, author, signal = null) {
     try {
       const res  = await fetchWithRetry(`${SEARCH_BASE}?${authorParams}`, 3, signal);
       const json = await res.json();
-      const books = (json.docs || []).map(bookFromDoc).filter(Boolean);
-      if (books.length) {
+      const raw = (json.docs || []).map(bookFromDoc).filter(Boolean);
+      if (raw.length) {
+        const books = await enrichWithDescriptions(raw);
         queryCache[authorKey] = queryCache[cacheKey] = books;
         return books;
       }
@@ -1391,6 +1492,10 @@ async function searchByQuery(title, author, signal = null) {
   }
 
   if (!books.length) throw new Error('No books found. Try a different search.');
+  // Enrich with descriptions before caching — mirrors iOS search() which calls
+  // enrichSearchResults() before storing results. Cache always holds enriched books
+  // so cache hits render with correct age/romance ratings immediately.
+  books = await enrichWithDescriptions(books);
   queryCache[cacheKey] = books;
   return books;
 }
