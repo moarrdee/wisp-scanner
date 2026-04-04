@@ -543,7 +543,7 @@ img.nav-logo {
   font-family: Georgia, serif; font-style: italic;
   font-size: 11px; color: var(--gold); opacity: 0.60;
   text-align: center;
-  position: absolute; bottom: 28px;
+  margin-top: 10px;
 }
 
 /* ── Wisp orbs ────────────────────────────────────────── */
