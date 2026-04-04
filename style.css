@@ -410,8 +410,7 @@ img.nav-logo {
   flex: 1;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
-  display: flex;
-  flex-direction: column;
+  position: relative;
   padding: 0 20px 30px;
 }
 .results-label {
@@ -498,10 +497,10 @@ img.nav-logo {
 
 /* ── Search placeholder (initial / cleared state) ────── */
 .search-placeholder {
-  position: relative;
+  position: absolute;
+  inset: 0;
   display: flex; flex-direction: column;
   align-items: center; justify-content: center;
-  flex: 1;
   padding: 8px 24px 12px;
   gap: 0;
 }
