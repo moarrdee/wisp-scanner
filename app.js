@@ -74,6 +74,7 @@ let _procCtx    = null;
 let _rafId      = null;  // requestAnimationFrame handle
 let _scanning   = false; // true while the decode loop should run
 let _frameReady = true;  // false while a ZBar decode is awaiting
+let _scanSession = 0;    // incremented on every stop — guards against stream leaks
 let lastScanned = null;
 let _readCounts = {};    // { isbn: score } — hit/miss sliding window
 
@@ -109,14 +110,21 @@ function startScanner() {
   }
   area.appendChild(_videoEl);
 
+  const session = ++_scanSession;
   navigator.mediaDevices.getUserMedia({
     video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
   })
   .then(stream => {
+    if (_scanSession !== session) {
+      // stopScanner() was called while getUserMedia was in flight — discard stream
+      stream.getTracks().forEach(t => t.stop());
+      return;
+    }
     _videoEl.srcObject = stream;
     return _videoEl.play();
   })
   .then(() => {
+    if (_scanSession !== session) return;
     _scanning   = true;
     _frameReady = true;
     lastScanned = null;
@@ -127,6 +135,7 @@ function startScanner() {
 }
 
 function stopScanner() {
+  _scanSession++;
   _scanning = false;
   if (_rafId) { cancelAnimationFrame(_rafId); _rafId = null; }
   if (_videoEl?.srcObject) {
@@ -231,12 +240,18 @@ async function _decodeFrame() {
 
 // ── ISBN validation ───────────────────────────────────────────────────────────
 
-// Returns true only for codes with a valid EAN-13 or ISBN-10 check digit.
+// Returns true only for codes with a valid EAN-13, UPC-A, or ISBN-10 check digit.
 function isValidISBNCode(isbn) {
   if (isbn.length === 13) {
     let sum = 0;
     for (let i = 0; i < 12; i++) sum += parseInt(isbn[i]) * (i % 2 === 0 ? 1 : 3);
     return (10 - (sum % 10)) % 10 === parseInt(isbn[12]);
+  }
+  if (isbn.length === 12) {
+    // UPC-A check digit
+    let sum = 0;
+    for (let i = 0; i < 11; i++) sum += parseInt(isbn[i]) * (i % 2 === 0 ? 3 : 1);
+    return (10 - (sum % 10)) % 10 === parseInt(isbn[11]);
   }
   if (isbn.length === 10) {
     let sum = 0;
@@ -397,7 +412,7 @@ function clearField(id) {
   const el = document.getElementById(id);
   el.value = '';
   const clearBtn = el.nextElementSibling;
-  if (clearBtn) clearBtn.classList.add('hidden');
+  if (clearBtn?.classList.contains('clear-x')) clearBtn.classList.add('hidden');
   updateSearchBtn();
   el.focus();
 }
@@ -463,6 +478,7 @@ async function performSearch() {
       books = await searchByQuery(t, a, controller.signal);
     }
     books = await enrichWithDescriptions(books);
+    if (searchPending !== controller) return; // new search started while fetching descriptions
     renderResults(books);
   } catch (e) {
     if (e.name === 'AbortError') return;
@@ -584,13 +600,13 @@ function renderError(msg) {
 }
 
 function bookCardHTML(book, idx) {
-  const age    = ageRating(book);
-  const colour = AGE_COLOURS[age] || '#9B804A';
-  const thumb  = book.coverURL
+  const age        = ageRating(book);
+  const colour     = AGE_COLOURS[age] || '#9B804A';
+  const thumb      = book.coverURL
     ? `<img src="${escHtml(book.coverURL)}" alt="" loading="lazy" onerror="this.parentElement.innerHTML='<span class=thumb-placeholder>📖</span>'">`
     : `<span class="thumb-placeholder">📖</span>`;
-  const ageIcon = AGE_ICONS[age] || '';
-  const romance = hasRomanticThemes(book)
+  const ageIconSVG = AGE_ICONS[age] || '';
+  const romance    = hasRomanticThemes(book)
     ? `<span class="badge badge-romance">${HEART_SVG}Romance</span>` : '';
 
   return `<div class="book-card" data-card-idx="${idx}" onclick="openBookByIndex(${idx})" role="button" tabindex="0"
@@ -600,7 +616,7 @@ function bookCardHTML(book, idx) {
       <div class="book-title">${escHtml(book.title)}</div>
       <div class="book-author">${escHtml(book.authors?.join(', ') || 'Unknown Author')}</div>
       <div class="book-badges">
-        <span class="badge badge-age" style="--badge-color:${colour}">${ageIcon}${escHtml(age)}</span>
+        <span class="badge badge-age" style="--badge-color:${colour}">${ageIconSVG}${escHtml(age)}</span>
         ${romance}
       </div>
     </div>
@@ -614,7 +630,7 @@ function openBookByIndex(i) { openDetail(currentResults[i]); }
 
 // ── Detail view ───────────────────────────────────────────────────────────────
 function openDetail(book) {
-  currentResults  = currentResults.length ? currentResults : [book];
+  if (!currentResults.some(b => b.id === book.id)) currentResults = [book];
   currentDetailId = book.id;   // guard against stale description race conditions
   descExpanded    = false;     // always start with description collapsed
 
@@ -634,7 +650,7 @@ function openDetail(book) {
     const el = document.getElementById('detail-desc-text');
     if (el) {
       el.dataset.full = desc;
-      el.textContent = desc.length > 400 ? desc.slice(0, 400) + '\u2026' : desc;
+      el.textContent = (descExpanded || desc.length <= 400) ? desc : desc.slice(0, 400) + '\u2026';
       const section = document.getElementById('detail-desc-section');
       if (section) section.classList.remove('hidden');
       const btn = document.getElementById('detail-desc-toggle');
@@ -1330,7 +1346,7 @@ async function searchByQuery(title, author, signal = null) {
       const json = await res.json();
       const books = (json.docs || []).map(bookFromDoc).filter(Boolean);
       if (books.length) {
-        queryCache[authorKey] = books;
+        queryCache[authorKey] = queryCache[cacheKey] = books;
         return books;
       }
     } catch (_) { /* fall through to q= */ }
