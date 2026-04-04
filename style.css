@@ -498,9 +498,9 @@ img.nav-logo {
 .search-placeholder {
   position: relative;
   display: flex; flex-direction: column;
-  align-items: center; justify-content: center;
+  align-items: center; justify-content: flex-start;
   min-height: 400px;
-  padding: 4px 32px 4px;
+  padding: 20px 32px 4px;
   gap: 0;
 }
 .ph-float-wisps { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
