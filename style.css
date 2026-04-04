@@ -11,7 +11,7 @@
   --cream-dim:  #F2EDE399;
   --rose:       #D16B8F;
   --tab-h:      64px;
-  --nav-h:      52px;
+  --nav-h:      36px;
   --safe-bottom: env(safe-area-inset-bottom, 0px);
   --safe-top:    env(safe-area-inset-top, 0px);
 }
@@ -72,13 +72,13 @@ html, body {
   align-items: center;
   justify-content: space-between;
   min-height: calc(var(--nav-h) + var(--safe-top));
-  padding: var(--safe-top) 16px 10px;
+  padding: var(--safe-top) 16px 6px;
   background: var(--dark-green);
   flex-shrink: 0;
   border-bottom: 1px solid #ffffff0d;
 }
 img.nav-logo {
-  height: 34px;
+  height: 26px;
   width: auto;
   object-fit: contain;
   display: block;
