@@ -211,12 +211,26 @@ async function _decodeFrame() {
     return;
   }
 
-  // ZBar returns the raw decoded string; strip non-digit characters
-  // (some symbol types include a checksum character or prefix text).
-  const raw  = symbols[0].decode();
-  const code = raw.replace(/[^0-9X]/gi, '').toUpperCase();
+  // ZBar may return multiple symbols in one frame — e.g. EAN-13 + EAN-5 supplement
+  // (the 5-digit price add-on printed to the right of most book barcodes). If the
+  // supplement is listed first, taking symbols[0] silently discards the valid EAN-13.
+  // We iterate all symbols and take the best: prefer a 13-digit ISBN starting with
+  // 978 or 979, then accept any other valid ISBN format as a fallback.
+  let code = null;
+  for (const sym of symbols) {
+    const raw       = sym.decode();
+    const candidate = raw.replace(/[^0-9X]/gi, '').toUpperCase();
+    if (!candidate || !isValidISBNCode(candidate)) continue;
+    // Strongly prefer book ISBNs (EAN-13 with 978/979 prefix)
+    if (candidate.length === 13 &&
+        (candidate.startsWith('978') || candidate.startsWith('979'))) {
+      code = candidate;
+      break; // can't do better — stop scanning further symbols
+    }
+    if (!code) code = candidate; // accept first valid non-book code; keep looking
+  }
 
-  if (!code || !isValidISBNCode(code)) {
+  if (!code) {
     document.getElementById('scan-box')?.classList.remove('locking');
     return;
   }
@@ -300,6 +314,7 @@ async function handleScannedISBN(isbn) {
       </div>
       <p class="scan-status-title">Searching…</p>
       <p class="scan-status-sub">Looking up barcode in the catalogue</p>
+      <p style="font-size:11px;opacity:0.45;margin-top:6px;letter-spacing:0.5px;font-family:monospace">${escHtml(isbn)}</p>
     </div>`;
   resultEl.classList.remove('hidden');
 
@@ -1282,6 +1297,67 @@ async function searchByISBN(isbn, signal = null) {
     isbnCache[isbn] = book;
     return [book];
   }
+
+  // ── Last-resort path: OL /isbn/ edition record → GB title+author search ──────
+  // For brand-new or Deluxe/Limited editions whose specific ISBN isn't indexed in
+  // the OL search index or GB isbn: lookup, the OL /isbn/{isbn}.json redirect
+  // endpoint often has basic edition metadata (title, author keys) even when the
+  // search index doesn't. We extract title + first author, then hit GB with an
+  // intitle:/inauthor: query — which reliably finds the book by name even when
+  // the specific edition ISBN isn't registered.
+  if (!signal?.aborted) {
+    try {
+      const metaCtrl    = new AbortController();
+      const onMetaAbort = () => metaCtrl.abort();
+      signal?.addEventListener('abort', onMetaAbort, { once: true });
+      const metaTimer = setTimeout(() => metaCtrl.abort(), 8000);
+      const metaRes   = await fetch(`https://openlibrary.org/isbn/${isbn}.json`,
+                                    { signal: metaCtrl.signal });
+      clearTimeout(metaTimer);
+      signal?.removeEventListener('abort', onMetaAbort);
+
+      if (metaRes.ok) {
+        const meta       = await metaRes.json();
+        const metaTitle  = meta.title;
+        const authorKey  = meta.authors?.[0]?.key ?? null;
+
+        // Resolve the first author's display name from their OL author record
+        let authorName = null;
+        if (authorKey) {
+          try {
+            const authCtrl    = new AbortController();
+            const onAuthAbort = () => authCtrl.abort();
+            signal?.addEventListener('abort', onAuthAbort, { once: true });
+            const authTimer = setTimeout(() => authCtrl.abort(), 5000);
+            const authRes   = await fetch(`https://openlibrary.org${authorKey}.json`,
+                                          { signal: authCtrl.signal });
+            clearTimeout(authTimer);
+            signal?.removeEventListener('abort', onAuthAbort);
+            if (authRes.ok) {
+              const authData = await authRes.json();
+              authorName = authData.personal_name ?? authData.name ?? null;
+            }
+          } catch { /* author name is best-effort */ }
+        }
+
+        if (metaTitle) {
+          const q = authorName
+            ? `intitle:"${metaTitle}" inauthor:"${authorName}"`
+            : `intitle:"${metaTitle}"`;
+          const gbTitleResults = await fetchFromGoogleBooks(q, signal);
+          if (gbTitleResults.length) {
+            const book = await enrichSpecialEdition(gbTitleResults[0], signal);
+            isbnCache[isbn] = book;
+            return [book];
+          }
+        }
+      }
+    } catch (e) {
+      if (e.name === 'AbortError' && signal?.aborted) throw e;
+      // silently fall through to the final error
+    }
+  }
+
   throw new FetchError('No books found. Try a different search.');
 }
 
