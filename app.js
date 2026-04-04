@@ -955,7 +955,7 @@ const EROTICA_TERMS = [
   'erotic fantasy','erotic science fiction','adult erotica',
   'sexually explicit','explicit sexual',
 ];
-const EXPLICIT_ROMANCE = ['dark romance','steamy romance','explicit romance','erotic romance novels'];
+const EXPLICIT_ROMANCE = ['dark romance','darkromance','steamy romance','explicit romance','erotic romance novels'];
 const EXPLICIT_DESC    = [
   'explicit sex','graphic sexual','explicit sexual content','sexually explicit','graphic sex scenes',
   // BDSM and kink — explicit consensual sexual content; also signals romance (see DESC_ROMANCE_SIGNALS)
