@@ -939,7 +939,8 @@ const GENRE_TAGS    = ['fantasy','science fiction','romance','thriller','mystery
 // Keyed by "normalised title|first author" for books where Open Library data
 // produces an incorrect rating. Values are applied before any inference logic.
 const RATING_OVERRIDES = {
-  'a court of wings and ruin|sarah j. maas': { age: 'Young Adult', romance: true },
+  'a court of wings and ruin|sarah j. maas':    { age: 'Young Adult', romance: true },
+  'a court of frost and starlight|sarah j. maas': { romance: true },
 };
 
 function overrideKey(book) {
