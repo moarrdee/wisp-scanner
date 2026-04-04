@@ -492,16 +492,9 @@ async function performSearch() {
 }
 
 function setSearchLoading(on) {
-  const btn   = document.getElementById('search-btn');
-  const label = document.getElementById('search-label');
-  const icon  = document.getElementById('search-icon');
+  const btn = document.getElementById('search-btn');
   btn.disabled = on;
-  label.textContent = on ? 'Searching…' : 'Search Books';
-  icon.style.display = on ? 'none' : '';
   if (on) {
-    const spinner = document.createElement('div');
-    spinner.className = 'spinner'; spinner.id = 'search-spinner';
-    btn.insertBefore(spinner, label);
     document.getElementById('search-results').innerHTML = `
       <div class="state-view">
         <div class="loading-cluster">
@@ -511,8 +504,6 @@ function setSearchLoading(on) {
         <p style="font-family:Georgia,serif;font-style:italic;margin-top:16px;font-size:15px">The wisps are searching…</p>
         <p style="font-size:12px;margin-top:4px;color:var(--gold);opacity:0.65">consulting the ancient tomes</p>
       </div>`;
-  } else {
-    document.getElementById('search-spinner')?.remove();
   }
 }
 
@@ -528,24 +519,31 @@ function setSearchLoading(on) {
 // Called inside searchByQuery/searchByISBN so cached results include descriptions.
 async function enrichWithDescriptions(books) {
   return Promise.all(books.map(async book => {
-    if (book.description) return book;
-    // Phase 1: OL works endpoint
-    if (book.id?.startsWith('/works/')) {
+    if (book.description && book.coverURL) return book; // already complete
+    // Phase 1: OL works endpoint for description
+    if (!book.description && book.id?.startsWith('/works/')) {
       const desc = await fetchDescription(book.id);
-      if (desc) return Object.assign({}, book, { description: desc });
+      if (desc) {
+        book = Object.assign({}, book, { description: desc });
+        if (book.coverURL) return book; // now complete
+      }
     }
-    // Phase 2: Google Books via ISBN — fills description + maturity signals for
-    // books where OL has no works description (common for new releases)
-    if (book.isbn) {
-      const gbResults = await fetchFromGoogleBooks(`isbn:${book.isbn}`);
+    // Phase 2: Google Books — fill any remaining gaps (description, cover, categories).
+    // Use ISBN lookup for accuracy when available; fall back to title+author search.
+    if (!book.description || !book.coverURL) {
+      const gbQuery = book.isbn
+        ? `isbn:${book.isbn}`
+        : book.authors[0]
+          ? `intitle:"${book.title}" inauthor:"${book.authors[0]}"`
+          : `"${book.title}"`;
+      const gbResults = await fetchFromGoogleBooks(gbQuery);
       if (gbResults.length) {
         const gb = gbResults[0];
         return Object.assign({}, book, {
-          description:    gb.description    ?? book.description,
-          // Supplement sparse OL subjects with Google Books BISAC categories
+          description:    book.description  ?? gb.description,
           categories:     book.categories.length ? book.categories : (gb.categories.length ? gb.categories : []),
           maturityRating: gb.maturityRating === 'MATURE' ? 'MATURE' : book.maturityRating,
-          coverURL:       book.coverURL ?? gb.coverURL,
+          coverURL:       book.coverURL     ?? gb.coverURL,
         });
       }
     }
@@ -656,7 +654,7 @@ function renderError(msg) {
         <span class="state-icon" style="color:var(--gold)">${WARN}</span>
       </div>
       <h2>${escHtml(msg)}</h2>
-      <button class="btn-primary" style="margin-top:16px;max-width:160px" onclick="performSearch()">Try Again</button>
+      <button class="btn-primary" style="margin-top:16px;flex:none;width:auto;padding:12px 28px" onclick="performSearch()">Try Again</button>
     </div>`;
 }
 
@@ -1525,11 +1523,17 @@ async function searchByQuery(title, author, signal = null) {
   }
 
   if (!books.length) {
-    // OL returned nothing — try Google Books for new releases not yet indexed
-    const gbQuery = title && author
-      ? `intitle:${title}+inauthor:${author}`
-      : title ? `intitle:${title}` : `inauthor:${author}`;
-    const gbResults = await fetchFromGoogleBooks(gbQuery, signal);
+    // OL returned nothing — try Google Books with progressively looser queries
+    const gbQueries = title && author
+      ? [`intitle:"${title}" inauthor:"${author}"`, `"${title}" "${author}"`, `${title} ${author}`]
+      : title
+        ? [`intitle:"${title}"`, `"${title}"`, title]
+        : [`inauthor:"${author}"`, author];
+    let gbResults = [];
+    for (const q of gbQueries) {
+      gbResults = await fetchFromGoogleBooks(q, signal);
+      if (gbResults.length) break;
+    }
     if (gbResults.length) {
       queryCache[cacheKey] = gbResults;
       return gbResults;
@@ -1617,19 +1621,27 @@ function bookFromGoogleVolume(item) {
 
 // Queries the Google Books API. Returns [] on any failure so it is always
 // safe to use as a best-effort fallback without breaking the main flow.
+// Retries once on 429 (keyless rate-limit) with a short back-off.
 async function fetchFromGoogleBooks(query, signal = null) {
-  try {
-    const qs = new URLSearchParams({ q: query, maxResults: '10', printType: 'books' });
-    if (GB_KEY) qs.set('key', GB_KEY);
-    const ctrl  = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 10000);
-    signal?.addEventListener('abort', () => ctrl.abort(), { once: true });
-    const res = await fetch(`${GB_BASE}?${qs}`, { signal: ctrl.signal });
-    clearTimeout(timer);
-    if (!res.ok) return [];
-    const json = await res.json();
-    return (json.items || []).map(bookFromGoogleVolume).filter(Boolean);
-  } catch { return []; }
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const qs = new URLSearchParams({ q: query, maxResults: '10' });
+      if (GB_KEY) qs.set('key', GB_KEY);
+      const ctrl  = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 10000);
+      signal?.addEventListener('abort', () => ctrl.abort(), { once: true });
+      const res = await fetch(`${GB_BASE}?${qs}`, { signal: ctrl.signal });
+      clearTimeout(timer);
+      if (res.status === 429) {
+        if (attempt < 2) { await sleep(1000); continue; }
+        return [];
+      }
+      if (!res.ok) return [];
+      const json = await res.json();
+      return (json.items || []).map(bookFromGoogleVolume).filter(Boolean);
+    } catch { return []; }
+  }
+  return [];
 }
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
