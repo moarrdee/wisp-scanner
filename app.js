@@ -440,6 +440,7 @@ function updateSearchBtn() {
 
 function clearSearch() {
   if (searchPending) { searchPending.abort(); searchPending = null; }
+  setSearchLoading(false);
   ['input-title','input-author','input-isbn'].forEach(id => {
     const el = document.getElementById(id);
     el.value = '';
@@ -449,14 +450,12 @@ function clearSearch() {
   renderPlaceholder();
   document.getElementById('search-btn').disabled = true;
   document.getElementById('clear-btn').classList.add('hidden');
-  document.getElementById('search-label').textContent = 'Search Books';
-  document.getElementById('search-icon').style.display = '';
 }
 
 async function performSearch() {
   const t    = document.getElementById('input-title').value.trim();
   const a    = document.getElementById('input-author').value.trim();
-  const isbn = document.getElementById('input-isbn').value.replace(/\D/g, '');
+  const isbn = document.getElementById('input-isbn').value.replace(/[^0-9X]/gi, '').toUpperCase();
 
   if (!t && !a && !isbn) return;
 
@@ -478,7 +477,9 @@ async function performSearch() {
       books = await searchByQuery(t, a, controller.signal);
     }
     if (searchPending !== controller) return;
-    books = await enrichWithDescriptions(books);
+    // ISBN path: searchByISBN doesn't enrich internally, so enrich here.
+    // Query path: searchByQuery already enriches before caching; skip to avoid redundant calls.
+    if (isbn) books = await enrichWithDescriptions(books);
     if (searchPending !== controller) return;
     renderResults(books);
   } catch (e) {
@@ -667,7 +668,7 @@ function bookCardHTML(book, idx) {
 
 // Store current results for tap-to-detail
 let currentResults = [];
-function openBookByIndex(i) { openDetail(currentResults[i]); }
+function openBookByIndex(i) { if (currentResults[i]) openDetail(currentResults[i]); }
 
 // ── Detail view ───────────────────────────────────────────────────────────────
 function openDetail(book) {
