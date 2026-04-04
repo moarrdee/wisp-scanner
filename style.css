@@ -500,7 +500,7 @@ img.nav-logo {
   display: flex; flex-direction: column;
   align-items: center; justify-content: center;
   min-height: 400px;
-  padding: 14px 32px 60px;
+  padding: 7px 32px 30px;
   gap: 0;
 }
 .ph-float-wisps { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
@@ -543,6 +543,7 @@ img.nav-logo {
   font-family: Georgia, serif; font-style: italic;
   font-size: 13px; color: var(--gold); opacity: 0.60;
   text-align: center;
+  margin-top: 6px;
 }
 
 /* ── Wisp orbs ────────────────────────────────────────── */
