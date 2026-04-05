@@ -927,11 +927,24 @@ function infoHTML() {
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
         Where the book data comes from
       </h2>
-      <p>Wisp Scanner draws from three book databases to give you the most complete picture possible:</p>
-      <p><strong style="color:var(--gold)">Open Library</strong> is a free, community-run catalogue maintained by the Internet Archive. It holds records for millions of books from libraries and publishers around the world. This is the primary source for descriptions, cover images, page counts, and subject tags.</p>
-      <p><strong style="color:var(--gold)">Google Books</strong> steps in when a book is too new to appear on Open Library yet — particularly recent hardcover releases. It provides cover images, descriptions, and publication details for titles that are still fresh off the press.</p>
-      <p><strong style="color:var(--gold)">Hardcover</strong> is a modern book-tracking platform with a rich catalogue that includes many new and upcoming releases. When a book can't be found elsewhere, Wisp Scanner checks Hardcover as a final fallback — it's especially useful for limited-edition and specialty releases.<br><br>
-      Because these catalogues are community-maintained and not always complete, some details — like cover images, page counts, or subject tags — may occasionally be missing or imprecise.</p>
+      <ul class="info-sources">
+        <li>
+          <span class="source-name">Open Library</span>
+          <span class="source-role source-primary">Primary</span>
+          <span class="source-desc">A free, open catalogue of millions of books, maintained by the Internet Archive.</span>
+        </li>
+        <li>
+          <span class="source-name">Google Books</span>
+          <span class="source-role source-secondary">Secondary</span>
+          <span class="source-desc">Google's book index, used to fill in details for titles too new to appear on Open Library.</span>
+        </li>
+        <li>
+          <span class="source-name">Hardcover</span>
+          <span class="source-role source-secondary">Secondary</span>
+          <span class="source-desc">A modern book-tracking platform, consulted as a final fallback for new and specialty releases.</span>
+        </li>
+      </ul>
+      <p style="margin-top:14px">Because these catalogues are community-maintained and not always complete, some details — like cover images, page counts, or subject tags — may occasionally be missing or imprecise.</p>
     </div>
     <hr class="info-divider">
     <div class="info-section">
