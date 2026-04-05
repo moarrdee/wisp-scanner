@@ -1,5 +1,7 @@
 'use strict';
 
+const APP_VERSION = '1.26';
+
 // ── Theme colours for age rating badges ───────────────────────────────────────
 const AGE_COLOURS = {
   'Kids':         '#4DB350',
@@ -942,7 +944,8 @@ function infoHTML() {
       This flag is not a measure of how explicit the content is. A book can carry the romantic themes flag at any age rating, from Young Adult to Mature. Books with sparse or missing tags may not show the flag even when romantic themes are present.</p>
     </div>
     <hr class="info-divider">
-    <p class="attribution">Book data is sourced from Open Library (openlibrary.org), a project of the Internet Archive, and is made available under open licensing. Cover images are served from the Open Library Covers API.</p>`;
+    <p class="attribution">Book data is sourced from Open Library (openlibrary.org), a project of the Internet Archive, and is made available under open licensing. Cover images are served from the Open Library Covers API.</p>
+    <p class="attribution" style="margin-top:8px;opacity:0.45">Version ${APP_VERSION}</p>`;
 }
 
 // ── Age rating logic (ported from BookModel.swift) ────────────────────────────
