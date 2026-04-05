@@ -1314,7 +1314,9 @@ async function searchByISBN(isbn, signal = null) {
   const [_gbResults13, _gbResults10] = await Promise.all([_gb13, _gb10]);
   const gbBook = _gbResults13[0] ?? _gbResults10[0] ?? null;
   if (gbBook) {
-    const book = await enrichSpecialEdition(gbBook, signal);
+    // forceOLLookup=true: GB records are always sparse — run OL title+author
+    // enrichment regardless of whether the title looks like a special edition.
+    const book = await enrichSpecialEdition(gbBook, signal, true);
     isbnCache[isbn] = book;
     return [book];
   }
@@ -1393,9 +1395,9 @@ async function searchByISBN(isbn, signal = null) {
       const hintJson = await hintRes.json();
       const hintDocs = (hintJson.docs || []).map(bookFromDoc).filter(Boolean);
       if (hintDocs.length) {
-        // Use the best-matching doc (first result) and enrich it as a special
-        // edition so the original Deluxe title, cover, and description are filled in.
-        const book = await enrichSpecialEdition(hintDocs[0], signal);
+        // forceOLLookup=true: eagerly fetch description from the works endpoint
+        // so it is available immediately when the detail view opens.
+        const book = await enrichSpecialEdition(hintDocs[0], signal, true);
         isbnCache[isbn] = book;
         return [book];
       }
@@ -1483,45 +1485,53 @@ async function fetchISBNFromSearch(candidate, signal = null) {
 //   "The Name of the Wind Tenth Anniversary Deluxe Edition"
 const EDITION_WORD_RE = /\b(deluxe|limited|collector[\u2019']?s?|special|anniversary|illustrated|signed|exclusive|expanded|hardcover)\b/i;
 
-// Returns a (possibly enriched) copy of book. If the title contains edition
-// qualifiers AND the record is missing a cover or has very sparse categories,
-// we search Open Library for the base title + author and merge in the
-// cover, subjects, page count, and /works/ id from the best matching result.
+// Returns a (possibly enriched) copy of book. Searches Open Library for the
+// base title + author and merges in cover, subjects, page count, description,
+// and /works/ id from the best matching result.
 // We always keep the original title, id, and ISBN so catalogue links stay correct.
-async function enrichSpecialEdition(book, signal = null) {
+//
+// forceOLLookup — pass true for books sourced from Google Books. GB records are
+// always sparse (minimal categories, often no description, no OL /works/ id).
+// Without this flag, plain-titled GB books (no "Deluxe"/"Edition" in the title)
+// exit early and never receive OL enrichment, so age/romance ratings and
+// descriptions are missing or wrong.
+async function enrichSpecialEdition(book, signal = null, forceOLLookup = false) {
   const lc = book.title.toLowerCase();
+  const isEditionTitle = EDITION_WORD_RE.test(lc) && lc.includes('edition');
 
-  // Quick check — does the title contain any edition word plus "edition"?
-  if (!EDITION_WORD_RE.test(lc) || !lc.includes('edition')) return book;
+  // Only enrich when the title has edition qualifiers OR the caller explicitly
+  // requests it (forceOLLookup) for GB-sourced books that are sparse by nature.
+  if (!forceOLLookup && !isEditionTitle) return book;
 
-  // Only enrich if something useful is missing — avoids unnecessary API calls.
-  // Always enrich when description is null: special/collector's editions often have
-  // sparse works records; the base edition carries richer description + subject tags
-  // (e.g. "dark romance") that drive accurate age/romance detection.
+  // Skip if already fully enriched — cover + rich subject tags + description.
+  // Always enrich when description is null: both special editions and GB books
+  // often lack it, and the description drives age/romance detection.
   if (book.coverURL && book.categories.length > 5 && book.description) return book;
 
-  // Derive the base title by progressively stripping edition qualifiers.
-  // We handle three common patterns:
-  //   1. Parenthetical suffix:  "Title (Deluxe Limited Edition)"
-  //   2. Colon/dash suffix:     "Title: Collector's Edition"
-  //   3. Direct suffix:         "Title Deluxe Edition"
-  // Shared qualifier group — matches words like "deluxe", "collector's", "limited", etc.
-  // The \u2019 covers the curly apostrophe used in many book titles.
-  const Q = "(?:(?:deluxe|limited|collector[\\u2019']?s?|special|anniversary|illustrated|signed|exclusive|expanded|hardcover)\\s+)+";
-  let baseTitle = book.title
-    // 1. Remove entire parenthetical that contains "edition": "(Deluxe Limited Edition)"
-    .replace(/\s*\([^)]*edition[s]?\s*\)/gi, '')
-    // 2. Remove colon/dash suffix where the suffix is just an edition qualifier:
-    //    ": Collector's Edition"  or  "— Deluxe Edition"
-    .replace(new RegExp('\\s*[:\\u2013\\u2014\\-]\\s*' + Q + 'edition[s]?\\s*$', 'gi'), '')
-    // 3. Remove trailing edition phrase appended without punctuation:
-    //    "A Court of Thorns and Roses Special Edition"
-    .replace(new RegExp('\\s+' + Q + 'edition[s]?\\s*$', 'gi'), '')
-    // 4. Clean up leftover punctuation/whitespace
-    .replace(/[\s:,\-\u2013\u2014(]+$/, '')
-    .trim();
-
-  if (!baseTitle || baseTitle.toLowerCase() === book.title.trim().toLowerCase()) return book;
+  // Derive the title to use when querying OL.
+  // Special-edition titles: strip qualifier words to find the canonical edition
+  //   ("Starside (Deluxe Limited Edition)" → "Starside").
+  // Plain titles (forceOLLookup, no edition words): use as-is.
+  let baseTitle;
+  if (isEditionTitle) {
+    // Shared qualifier group — matches words like "deluxe", "collector's", "limited", etc.
+    // The \u2019 covers the curly apostrophe used in many book titles.
+    const Q = "(?:(?:deluxe|limited|collector[\\u2019']?s?|special|anniversary|illustrated|signed|exclusive|expanded|hardcover)\\s+)+";
+    baseTitle = book.title
+      // 1. Remove entire parenthetical that contains "edition": "(Deluxe Limited Edition)"
+      .replace(/\s*\([^)]*edition[s]?\s*\)/gi, '')
+      // 2. Remove colon/dash suffix: ": Collector's Edition" or "— Deluxe Edition"
+      .replace(new RegExp('\\s*[:\\u2013\\u2014\\-]\\s*' + Q + 'edition[s]?\\s*$', 'gi'), '')
+      // 3. Remove trailing edition phrase: "A Court of Thorns and Roses Special Edition"
+      .replace(new RegExp('\\s+' + Q + 'edition[s]?\\s*$', 'gi'), '')
+      // 4. Clean up leftover punctuation/whitespace
+      .replace(/[\s:,\-\u2013\u2014(]+$/, '')
+      .trim();
+    // If stripping produced nothing or left the title unchanged, nothing to look up
+    if (!baseTitle || baseTitle.toLowerCase() === book.title.trim().toLowerCase()) return book;
+  } else {
+    baseTitle = book.title.trim();
+  }
 
   const author = book.authors?.[0] ?? '';
   try {
