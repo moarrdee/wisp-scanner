@@ -1,6 +1,6 @@
 'use strict';
 
-const APP_VERSION = '1.28';
+const APP_VERSION = '1.29';
 
 // ── Theme colours for age rating badges ───────────────────────────────────────
 const AGE_COLOURS = {
@@ -1672,6 +1672,14 @@ async function searchByQuery(title, author, signal = null) {
       queryCache[cacheKey] = gbResults;
       return gbResults;
     }
+
+    // GB also found nothing — try Hardcover full-text search as final fallback.
+    const hcResults = await fetchFromHardcoverByQuery(title, author, signal).catch(() => []);
+    if (hcResults.length) {
+      queryCache[cacheKey] = hcResults;
+      return hcResults;
+    }
+
     throw new Error('No books found. Try a different search.');
   }
   // Enrich with descriptions before caching — mirrors iOS search() which calls
@@ -1842,6 +1850,71 @@ function bookFromHardcoverEdition(edition) {
     coverURL:      edition.image?.url  ?? null,
     isbn,
   };
+}
+
+// Maps a Hardcover search result document (from the search() endpoint) to our
+// internal book shape. Search documents are flat — no nested edition/book objects.
+function bookFromHCSearch(doc) {
+  if (!doc?.title) return null;
+  const isbn13 = (doc.isbns ?? []).find(i => i.length === 13 && /^97[89]/.test(i)) ?? null;
+  const isbn10 = (doc.isbns ?? []).find(i => i.length === 10) ?? null;
+  const isbn   = isbn13 ?? isbn10 ?? null;
+  const categories = [
+    ...(doc.genres           ?? []),
+    ...(doc.moods            ?? []),
+    ...(doc.tags             ?? []),
+    ...(doc.content_warnings ?? []),
+  ].map(t => String(t).toLowerCase()).filter(Boolean);
+  return {
+    id:            isbn ? `/isbn/${isbn}` : `/hc/${doc.id}`,
+    title:         doc.title,
+    authors:       doc.author_names  ?? [],
+    description:   doc.description   ?? null,
+    categories,
+    maturityRating: 'NOT_MATURE',
+    pageCount:     doc.pages         ?? null,
+    publishedDate: doc.release_date  ?? null,
+    publisher:     null,
+    coverURL:      doc.image?.url    ?? null,
+    isbn,
+  };
+}
+
+// Title/author search against Hardcover's full-text search endpoint.
+// Used as a last-resort fallback in searchByQuery when OL and GB both return nothing.
+async function fetchFromHardcoverByQuery(title, author, signal = null) {
+  const q = [title, author].filter(Boolean).join(' ').trim();
+  if (!q) return [];
+
+  const query = `{ search(query:${JSON.stringify(q)},query_type:"book"){ results } }`;
+
+  const ctrl    = new AbortController();
+  const onAbort = () => ctrl.abort();
+  signal?.addEventListener('abort', onAbort, { once: true });
+  const timer = setTimeout(() => ctrl.abort(), 10000);
+
+  let res;
+  try {
+    res = await fetch(HC_BASE, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ query }),
+      signal:  ctrl.signal,
+    });
+  } catch (e) {
+    clearTimeout(timer);
+    signal?.removeEventListener('abort', onAbort);
+    return [];
+  }
+  clearTimeout(timer);
+  signal?.removeEventListener('abort', onAbort);
+
+  if (!res.ok) return [];
+  try {
+    const json = await res.json();
+    const hits = json?.data?.search?.results?.hits ?? [];
+    return hits.map(h => bookFromHCSearch(h.document)).filter(Boolean);
+  } catch { return []; }
 }
 
 // Queries Hardcover by ISBN-13, ISBN-10, or UPC-A (auto-converted to EAN-13).
