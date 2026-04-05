@@ -1,6 +1,6 @@
 'use strict';
 
-const APP_VERSION = '1.27';
+const APP_VERSION = '1.28';
 
 // ── Theme colours for age rating badges ───────────────────────────────────────
 const AGE_COLOURS = {
@@ -960,7 +960,7 @@ const DESC_ROMANCE_SIGNALS = [
   'enemies to lovers','second chance romance','slow burn','fated mates',
   'love triangle','fake dating','forced proximity','happily ever after',
   'swoon','forbidden love','will they won\'t they',
-  'dark romance','newfound love',
+  'dark romance','newfound love','romantasy',
   // dark romance / romantasy / spicy book community signals
   'steamy','spicy','sexual tension','romantic tension','love affair',
   'instalove','insta-love','romantically','their chemistry',
