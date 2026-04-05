@@ -193,6 +193,7 @@ img.nav-logo {
   padding: 10px 20px;
   text-align: center;
   white-space: nowrap;
+  max-width: calc(100% - 32px);
   display: flex; flex-direction: column; gap: 3px;
 }
 .scan-header-title {
@@ -282,10 +283,10 @@ img.nav-logo {
   50%       { transform: translateY(44px); }
 }
 
-/* "Found it!" confirmation flash */
+/* "Found it!" confirmation flash — sits below the hint bar (~112px clears it) */
 .scan-flash {
   position: absolute;
-  top: calc(50% + 80px);
+  top: calc(50% + 112px);
   left: 0; right: 0;
   text-align: center;
   z-index: 4;

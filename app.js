@@ -1,6 +1,7 @@
 'use strict';
 
-const APP_VERSION = '1.33';
+const APP_VERSION = '1.34';
+const LOGO_URL = 'https://www.wispbookshop.com/uploads/b/83d087e4aa8e2de4459401d9bcf103ff53ee9d453751c4902ece251eb7bbef58/Wisp-Bookshop-Logo-3_1752237750.png';
 
 // ── Theme colours for age rating badges ───────────────────────────────────────
 const AGE_COLOURS = {
@@ -24,12 +25,14 @@ const HEART_SVG = `<svg width="10" height="10" viewBox="0 0 24 24" fill="current
 // ── In-memory caches ──────────────────────────────────────────────────────────
 const queryCache = {};
 const isbnCache  = {};
+const descCache  = {}; // workKey → description string (avoids re-fetching the same /works/ endpoint)
 
 // ── State ─────────────────────────────────────────────────────────────────────
 let currentTab       = 'scan';
 let searchPending    = null;   // AbortController for in-flight search
 let currentDetailId  = null;   // tracks which book's detail is open (prevents stale desc race)
 let activeLookupId   = 0;      // incremented on every new ISBN lookup; stale async results check this
+let currentResults   = [];     // books displayed in the search results list
 
 // ── Custom error to distinguish deliberate throws from network failures ────────
 class FetchError extends Error {
@@ -376,6 +379,7 @@ function showManualISBN() {
       <p class="scan-status-sub">Type or paste the 10 or 13‑digit ISBN from the back of the book.</p>
       <input id="manual-isbn-input" type="text" inputmode="numeric"
         placeholder="e.g. 9781035049417"
+        aria-label="ISBN"
         autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false"
         onkeydown="if(event.key==='Enter')submitManualISBN()"
         style="width:100%;padding:12px 14px;border-radius:10px;border:1px solid #9b804a60;background:#132A1F;color:#F2EDE3;font-size:16px;margin-top:8px;outline:none;text-align:center;letter-spacing:1px;">
@@ -389,23 +393,8 @@ function showManualISBN() {
   setTimeout(() => document.getElementById('manual-isbn-input')?.focus(), 60);
 }
 
-function isValidISBN(digits) {
-  if (digits.length === 10) {
-    let sum = 0;
-    for (let i = 0; i < 9; i++) sum += parseInt(digits[i], 10) * (10 - i);
-    const check = (11 - (sum % 11)) % 11;
-    const last  = digits[9] === 'X' ? 10 : parseInt(digits[9], 10);
-    return check === last;
-  }
-  if (digits.length === 13) {
-    if (!/^\d{13}$/.test(digits)) return false;
-    let sum = 0;
-    for (let i = 0; i < 12; i++) sum += parseInt(digits[i], 10) * (i % 2 === 0 ? 1 : 3);
-    const check = (10 - (sum % 10)) % 10;
-    return check === parseInt(digits[12], 10);
-  }
-  return false;
-}
+// Alias — manual entry uses the same validator as the scanner
+const isValidISBN = isValidISBNCode;
 
 function submitManualISBN() {
   const input = document.getElementById('manual-isbn-input');
@@ -594,6 +583,11 @@ function renderResults(books) {
     html += bookCardHTML(book, i);
   });
   el.innerHTML = html;
+  el.querySelectorAll('.book-thumb img').forEach(img => {
+    img.addEventListener('error', () => {
+      img.parentElement.innerHTML = '<span class="thumb-placeholder">📖</span>';
+    }, { once: true });
+  });
   document.getElementById('clear-btn').classList.remove('hidden');
 
   // Background: enrich any special editions so their age/romance badges reflect
@@ -647,7 +641,6 @@ function renderResults(books) {
 
 function renderPlaceholder() {
   currentResults = [];
-  const LOGO = 'https://www.wispbookshop.com/uploads/b/83d087e4aa8e2de4459401d9bcf103ff53ee9d453751c4902ece251eb7bbef58/Wisp-Bookshop-Logo-3_1752237750.png';
   document.getElementById('search-results').innerHTML = `
     <div class="search-placeholder">
       <div class="ph-float-wisps" aria-hidden="true">
@@ -659,7 +652,7 @@ function renderPlaceholder() {
       <div class="ph-logo-wrap">
         <div class="ph-orb-lg"></div>
         <div class="ph-orb-sm"></div>
-        <img class="ph-logo" src="${LOGO}" alt="Wisp Bookshop" loading="lazy">
+        <img class="ph-logo" src="${LOGO_URL}" alt="Wisp Bookshop" loading="lazy">
       </div>
       <h2 class="ph-title">Find Your Next Read</h2>
       <p class="ph-sub">Search by title, author, ISBN,<br>or any combination</p>
@@ -684,7 +677,7 @@ function bookCardHTML(book, idx) {
   const age        = ageRating(book);
   const colour     = AGE_COLOURS[age] || '#9B804A';
   const thumb      = book.coverURL
-    ? `<img src="${escHtml(book.coverURL)}" alt="" loading="lazy" onerror="this.parentElement.innerHTML='<span class=thumb-placeholder>📖</span>'">`
+    ? `<img src="${escHtml(book.coverURL)}" alt="" loading="lazy">`
     : `<span class="thumb-placeholder">📖</span>`;
   const ageIconSVG = AGE_ICONS[age] || '';
   const romance    = hasRomanticThemes(book)
@@ -705,8 +698,6 @@ function bookCardHTML(book, idx) {
   </div>`;
 }
 
-// Store current results for tap-to-detail
-let currentResults = [];
 function openBookByIndex(i) { if (currentResults[i]) openDetail(currentResults[i]); }
 
 // ── Detail view ───────────────────────────────────────────────────────────────
@@ -717,6 +708,10 @@ function openDetail(book) {
 
   const detail = document.getElementById('view-detail');
   document.getElementById('detail-content').innerHTML = detailHTML(book);
+  const coverImg = document.querySelector('#detail-content .detail-cover-wrap img');
+  if (coverImg) coverImg.addEventListener('error', () => {
+    coverImg.parentElement.innerHTML = '<span class="detail-cover-placeholder">📖</span>';
+  }, { once: true });
   detail.classList.remove('hidden');
 
   // Precompute ratings without description — used to detect change after fetch
@@ -803,7 +798,7 @@ function detailHTML(book) {
   const colour = AGE_COLOURS[age] || '#9B804A';
   const romance = hasRomanticThemes(book);
   const cover = book.coverURL
-    ? `<img src="${escHtml(book.coverURL)}" alt="" onerror="this.parentElement.innerHTML='<span class=detail-cover-placeholder>📖</span>'">`
+    ? `<img src="${escHtml(book.coverURL)}" alt="">`
     : `<span class="detail-cover-placeholder">📖</span>`;
 
   const rows = [];
@@ -894,7 +889,8 @@ function toggleDesc() {
     el.textContent = el.dataset.full;
     btn.textContent = 'Show less';
   } else {
-    el.textContent = el.dataset.full.slice(0, 400) + '\u2026';
+    const full = el.dataset.full;
+    el.textContent = full.length > 400 ? full.slice(0, 400) + '\u2026' : full;
     btn.textContent = 'Read more';
   }
 }
@@ -917,7 +913,7 @@ function closeInfo() {
 function infoHTML() {
   return `
     <div class="info-header">
-      <img class="info-logo" src="https://www.wispbookshop.com/uploads/b/83d087e4aa8e2de4459401d9bcf103ff53ee9d453751c4902ece251eb7bbef58/Wisp-Bookshop-Logo-3_1752237750.png" alt="Wisp Bookshop">
+      <img class="info-logo" src="${LOGO_URL}" alt="Wisp Bookshop">
       <h1>Wisp Scanner</h1>
       <p>A book lookup tool for Wisp Bookshop</p>
     </div>
@@ -1739,15 +1735,16 @@ async function searchByQuery(title, author, signal = null) {
 }
 
 async function fetchDescription(workKey) {
+  if (workKey in descCache) return descCache[workKey];
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 15000);
     const res = await fetch(`${WORKS_BASE}${workKey}.json`, { signal: controller.signal });
     clearTimeout(timer);
-    if (!res.ok) return null;
+    if (!res.ok) return (descCache[workKey] = null);
     const json = await res.json();
-    const d = json.description;
-    return typeof d === 'string' ? d : d?.value ?? null;
+    const d    = json.description;
+    return (descCache[workKey] = typeof d === 'string' ? d : d?.value ?? null);
   } catch { return null; }
 }
 
@@ -1765,6 +1762,7 @@ function bookFromBooksAPI(d, isbn) {
     publishedDate: d.publish_date ?? null,
     publisher:     d.publishers?.[0]?.name ?? null,
     coverURL:      d.cover?.medium ?? null,
+    isbn,
   };
 }
 
@@ -1903,8 +1901,8 @@ function bookFromHardcoverEdition(edition) {
 // internal book shape. Search documents are flat — no nested edition/book objects.
 function bookFromHCSearch(doc) {
   if (!doc?.title) return null;
-  const isbn13 = (doc.isbns ?? []).find(i => i.length === 13 && /^97[89]/.test(i)) ?? null;
-  const isbn10 = (doc.isbns ?? []).find(i => i.length === 10) ?? null;
+  const isbn13 = (doc.isbns ?? []).find(i => typeof i === 'string' && i.length === 13 && /^97[89]/.test(i)) ?? null;
+  const isbn10 = (doc.isbns ?? []).find(i => typeof i === 'string' && i.length === 10) ?? null;
   const isbn   = isbn13 ?? isbn10 ?? null;
   const categories = [
     ...(doc.genres           ?? []),
@@ -2035,4 +2033,14 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 document.addEventListener('DOMContentLoaded', () => {
   renderPlaceholder();
   startScanner();
+});
+
+// Stop the camera when the page is hidden (user switches apps or tabs) and
+// restart it when they return — saves battery and releases the camera LED.
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    stopScanner();
+  } else if (currentTab === 'scan') {
+    startScanner();
+  }
 });
