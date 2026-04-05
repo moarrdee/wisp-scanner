@@ -1,6 +1,6 @@
 'use strict';
 
-const APP_VERSION = '1.34';
+const APP_VERSION = '1.35';
 const LOGO_URL = 'https://www.wispbookshop.com/uploads/b/83d087e4aa8e2de4459401d9bcf103ff53ee9d453751c4902ece251eb7bbef58/Wisp-Bookshop-Logo-3_1752237750.png';
 
 // ── Theme colours for age rating badges ───────────────────────────────────────
@@ -382,6 +382,7 @@ function showManualISBN() {
         aria-label="ISBN"
         autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false"
         onkeydown="if(event.key==='Enter')submitManualISBN()"
+        oninput="this.style.borderColor='#9b804a60'"
         style="width:100%;padding:12px 14px;border-radius:10px;border:1px solid #9b804a60;background:#132A1F;color:#F2EDE3;font-size:16px;margin-top:8px;outline:none;text-align:center;letter-spacing:1px;">
       <div class="scan-status-actions" style="margin-top:4px">
         <button class="btn-primary" onclick="submitManualISBN()">Look Up</button>
@@ -533,7 +534,7 @@ async function enrichWithDescriptions(books, signal = null) {
     if (book.description && book.coverURL) return book; // already complete
     // Phase 1: OL works endpoint for description
     if (!book.description && book.id?.startsWith('/works/')) {
-      const desc = await fetchDescription(book.id);
+      const desc = await fetchDescription(book.id, signal);
       if (desc) {
         book = Object.assign({}, book, { description: desc });
         if (book.coverURL) return book; // now complete
@@ -1348,10 +1349,14 @@ async function searchByISBN(isbn, signal = null) {
       const onMetaAbort = () => metaCtrl.abort();
       signal?.addEventListener('abort', onMetaAbort, { once: true });
       const metaTimer = setTimeout(() => metaCtrl.abort(), 8000);
-      const metaRes   = await fetch(`https://openlibrary.org/isbn/${isbn}.json`,
-                                    { signal: metaCtrl.signal });
-      clearTimeout(metaTimer);
-      signal?.removeEventListener('abort', onMetaAbort);
+      let metaRes;
+      try {
+        metaRes = await fetch(`https://openlibrary.org/isbn/${isbn}.json`,
+                              { signal: metaCtrl.signal });
+      } finally {
+        clearTimeout(metaTimer);
+        signal?.removeEventListener('abort', onMetaAbort);
+      }
 
       if (metaRes.ok) {
         const meta       = await metaRes.json();
@@ -1366,10 +1371,14 @@ async function searchByISBN(isbn, signal = null) {
             const onAuthAbort = () => authCtrl.abort();
             signal?.addEventListener('abort', onAuthAbort, { once: true });
             const authTimer = setTimeout(() => authCtrl.abort(), 5000);
-            const authRes   = await fetch(`https://openlibrary.org${authorKey}.json`,
-                                          { signal: authCtrl.signal });
-            clearTimeout(authTimer);
-            signal?.removeEventListener('abort', onAuthAbort);
+            let authRes;
+            try {
+              authRes = await fetch(`https://openlibrary.org${authorKey}.json`,
+                                    { signal: authCtrl.signal });
+            } finally {
+              clearTimeout(authTimer);
+              signal?.removeEventListener('abort', onAuthAbort);
+            }
             if (authRes.ok) {
               const authData = await authRes.json();
               authorName = authData.personal_name ?? authData.name ?? null;
@@ -1564,7 +1573,7 @@ async function enrichSpecialEdition(book, signal = null, forceOLLookup = false) 
     const worksId = best.id?.startsWith('/works/') ? best.id
                   : (book.id?.startsWith('/works/') ? book.id : null);
     const description = worksId
-      ? await Promise.race([fetchDescription(worksId), sleep(6000).then(() => null)])
+      ? await Promise.race([fetchDescription(worksId, signal), sleep(6000).then(() => null)])
       : null;
 
     // Merge categories: deduplicate and combine both records so nothing is lost.
@@ -1734,13 +1743,16 @@ async function searchByQuery(title, author, signal = null) {
   return books;
 }
 
-async function fetchDescription(workKey) {
+async function fetchDescription(workKey, signal = null) {
   if (workKey in descCache) return descCache[workKey];
   try {
     const controller = new AbortController();
+    const onAbort = () => controller.abort();
+    signal?.addEventListener('abort', onAbort, { once: true });
     const timer = setTimeout(() => controller.abort(), 15000);
     const res = await fetch(`${WORKS_BASE}${workKey}.json`, { signal: controller.signal });
     clearTimeout(timer);
+    signal?.removeEventListener('abort', onAbort);
     if (!res.ok) return (descCache[workKey] = null);
     const json = await res.json();
     const d    = json.description;
