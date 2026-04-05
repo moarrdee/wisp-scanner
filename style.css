@@ -208,7 +208,8 @@ img.nav-logo {
   opacity: 0.75;
 }
 
-/* Scan zone box — box-shadow creates the full-screen dark vignette with cutout */
+/* Scan zone box — box-shadow creates the full-screen dark vignette with cutout.
+   No transition on the base rule so the vignette is always painted immediately. */
 #scan-box {
   position: relative;
   width: 280px; height: 120px;
@@ -216,13 +217,23 @@ img.nav-logo {
   border-radius: 10px;
   z-index: 3;
   box-shadow: 0 0 0 2000px rgba(0,0,0,0.62);
+}
+/* Gold glow is on a ::after pseudo-element so it can transition independently
+   without animating the large vignette shadow on every state change. */
+#scan-box::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 10px;
+  box-shadow: 0 0 0 0 transparent;
   transition: box-shadow 0.15s;
+  pointer-events: none;
 }
-#scan-box.detected {
-  box-shadow: 0 0 0 2000px rgba(0,0,0,0.62), 0 0 0 3px var(--gold);
+#scan-box.detected::after {
+  box-shadow: 0 0 0 3px var(--gold);
 }
-#scan-box.locking {
-  box-shadow: 0 0 0 2000px rgba(0,0,0,0.62), 0 0 0 2px rgba(155,128,74,0.45);
+#scan-box.locking::after {
+  box-shadow: 0 0 0 2px rgba(155,128,74,0.45);
   transition: box-shadow 0.1s;
 }
 
