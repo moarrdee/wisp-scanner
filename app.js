@@ -1164,7 +1164,7 @@ const GB_BASE = 'https://www.googleapis.com/books/v1/volumes';
 // console.cloud.google.com/apis/library/books.googleapis.com
 // then paste it below. The Books API free quota (1,000 requests/day) is more
 // than sufficient for a single-shop scanner.
-const GB_KEY  = '';
+const GB_KEY  = 'AIzaSyAY-W7OstK1cuGGwMxeuxZuP8G759oToDk';
 
 // ── Manual ISBN metadata hints ───────────────────────────────────────────────
 // Deluxe / Limited Edition ISBNs that haven't yet been indexed by Open Library
