@@ -1,6 +1,6 @@
 'use strict';
 
-const APP_VERSION = '1.31';
+const APP_VERSION = '1.32';
 
 // ── Theme colours for age rating badges ───────────────────────────────────────
 const AGE_COLOURS = {
