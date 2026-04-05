@@ -1,6 +1,6 @@
 'use strict';
 
-const APP_VERSION = '1.26';
+const APP_VERSION = '1.27';
 
 // ── Theme colours for age rating badges ───────────────────────────────────────
 const AGE_COLOURS = {
@@ -1173,7 +1173,6 @@ const GB_KEY  = 'AIzaSyAY-W7OstK1cuGGwMxeuxZuP8G759oToDk';
 // Requests are routed through a Cloudflare Worker proxy that holds the bearer
 // token server-side, solving the CORS preflight issue with the Hardcover API.
 const HC_BASE = 'https://wisp-hc-proxy.moarrdee.workers.dev';
-const HC_KEY  = null; // token lives in the Worker — not needed client-side
 
 async function fetchWithRetry(url, maxAttempts = 3, signal = null) {
   let attempt = 0;
@@ -1850,8 +1849,6 @@ function bookFromHardcoverEdition(edition) {
 // as a best-effort fallback. Retries up to 3× on network/429 errors.
 // Fired in parallel with OL and GB searches in searchByISBN.
 async function fetchFromHardcover(isbn, signal = null) {
-  if (!HC_KEY) return null;
-
   // Build the appropriate WHERE clause for the GraphQL query.
   let whereClause;
   if (isbn.length === 13)      whereClause = `isbn_13:{_eq:"${isbn}"}`;
