@@ -1,6 +1,6 @@
 'use strict';
 
-const APP_VERSION = '1.32';
+const APP_VERSION = '1.33';
 
 // ── Theme colours for age rating badges ───────────────────────────────────────
 const AGE_COLOURS = {
@@ -1181,14 +1181,9 @@ const BOOKS_BASE   = 'https://openlibrary.org/api/books';
 const WORKS_BASE   = 'https://openlibrary.org';
 const SEARCH_FIELDS = 'key,title,author_name,subject,cover_i,number_of_pages_median,first_publish_year,publisher,isbn';
 
-// ── Google Books API (fallback for new releases missing from Open Library) ────
-const GB_BASE = 'https://www.googleapis.com/books/v1/volumes';
-// REQUIRED: The keyless GB API silently returns 0 results for all queries —
-// even bestsellers — without a registered key. Obtain a free key at:
-// console.cloud.google.com/apis/library/books.googleapis.com
-// then paste it below. The Books API free quota (1,000 requests/day) is more
-// than sufficient for a single-shop scanner.
-const GB_KEY  = 'AIzaSyAY-W7OstK1cuGGwMxeuxZuP8G759oToDk';
+// ── Google Books API — proxied through the Cloudflare Worker (HC_BASE) ────────
+// The API key is stored as a Worker secret (GB_KEY) and never exposed in client
+// code. Requests go to HC_BASE?source=gb&q=... and the Worker adds the key.
 
 // ── Hardcover API (fallback for new releases with gaps in OL and Google Books) ─
 // Requests are routed through a Cloudflare Worker proxy that holds the bearer
@@ -1819,9 +1814,8 @@ function bookFromGoogleVolume(item) {
 // Retries up to 3 times on 429 or transient network errors with exponential
 // back-off (1 s, 2 s). Fired in parallel with OL searches for ISBN lookups.
 async function fetchFromGoogleBooks(query, signal = null) {
-  const qs = new URLSearchParams({ q: query, maxResults: '10' });
-  if (GB_KEY) qs.set('key', GB_KEY);
-  const url = `${GB_BASE}?${qs}`;
+  const qs  = new URLSearchParams({ source: 'gb', q: query, maxResults: '10' });
+  const url = `${HC_BASE}?${qs}`;
 
   for (let attempt = 1; attempt <= 3; attempt++) {
     if (signal?.aborted) return [];
