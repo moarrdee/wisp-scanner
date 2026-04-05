@@ -1166,6 +1166,10 @@ const GB_BASE = 'https://www.googleapis.com/books/v1/volumes';
 // than sufficient for a single-shop scanner.
 const GB_KEY  = 'AIzaSyAY-W7OstK1cuGGwMxeuxZuP8G759oToDk';
 
+// ── Hardcover API (fallback for new releases with gaps in OL and Google Books) ─
+const HC_BASE = 'https://api.hardcover.app/v1/graphql';
+// Free bearer token — obtain from hardcover.app → Account Settings → Hardcover API
+const HC_KEY  = 'eyJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJIYXJkY292ZXIiLCJ2ZXJzaW9uIjoiOCIsImp0aSI6ImQ3YzhjMjM1LWMwMzEtNDQwOS04NmQ2LTU2MWRlMDE3ODVhYiIsImFwcGxpY2F0aW9uSWQiOjIsInN1YiI6Ijg4Nzk2IiwiYXVkIjoiMSIsImlkIjoiODg3OTYiLCJsb2dnZWRJbiI6dHJ1ZSwiaWF0IjoxNzc1MzUwNTAyLCJleHAiOjE4MDY4ODY1MDIsImh0dHBzOi8vaGFzdXJhLmlvL2p3dC9jbGFpbXMiOnsieC1oYXN1cmEtYWxsb3dlZC1yb2xlcyI6WyJ1c2VyIl0sIngtaGFzdXJhLWRlZmF1bHQtcm9sZSI6InVzZXIiLCJ4LWhhc3VyYS1yb2xlIjoidXNlciIsIlgtaGFzdXJhLXVzZXItaWQiOiI4ODc5NiJ9LCJ1c2VyIjp7ImlkIjo4ODc5Nn19.mdkNvNI-x6Y2Q7Kib682nEaTXaJUmlGswH0SrZ_IMAo';
 
 async function fetchWithRetry(url, maxAttempts = 3, signal = null) {
   let attempt = 0;
@@ -1213,12 +1217,13 @@ async function searchByISBN(isbn, signal = null) {
     if (isbnCache[c]) { isbnCache[isbn] = isbnCache[c]; return [isbnCache[c]]; }
   }
 
-  // Fire Google Books isbn: queries immediately, in parallel with the OL searches.
-  // For books already in OL (most books) the OL result arrives first and GB is
-  // unused. For new releases not yet indexed by OL, GB has been running in
-  // parallel and will have a result ready (or nearly ready) by the time the OL
-  // loop finishes — eliminating the sequential delay of the old fallback.
+  // Fire Google Books and Hardcover isbn: queries immediately, in parallel with
+  // the OL searches. For books already in OL (most books) the OL result arrives
+  // first and the secondary sources are unused. For new releases not yet indexed
+  // by OL, these run concurrently and will have results ready (or nearly ready)
+  // by the time the OL loop finishes — eliminating any sequential delay.
   const _gb13 = fetchFromGoogleBooks(`isbn:${isbn}`, signal);
+  const _hc   = fetchFromHardcover(isbn, signal);
   // Only fire an isbn-10 GB query when the candidates list actually contains a
   // genuine ISBN-10 (exactly 10 alphanumeric chars, distinct from the original
   // ISBN). `c.length === 10` is sufficient here because buildISBNCandidates only
@@ -1291,15 +1296,26 @@ async function searchByISBN(isbn, signal = null) {
     return [book];
   }
 
-  // All OL candidates failed — await the already-in-flight GB requests.
-  // They started in parallel at the top of this function, so they've been
-  // running concurrently with the OL searches and should be ready by now.
+  // All OL candidates failed — await the already-in-flight GB and HC requests.
+  // All started in parallel at the top of this function and have been running
+  // concurrently with the OL loop, so results are ready (or nearly ready) now.
   const [_gbResults13, _gbResults10] = await Promise.all([_gb13, _gb10]);
   const gbBook = _gbResults13[0] ?? _gbResults10[0] ?? null;
   if (gbBook) {
     // forceOLLookup=true: GB records are always sparse — run OL title+author
     // enrichment regardless of whether the title looks like a special edition.
     const book = await enrichSpecialEdition(gbBook, signal, true);
+    isbnCache[isbn] = book;
+    return [book];
+  }
+
+  // GB found nothing — check Hardcover (also already in-flight).
+  const hcBook = await _hc;
+  if (hcBook) {
+    // forceOLLookup=true: attempt OL enrichment to add a /works/ id and any
+    // additional OL subject tags. enrichSpecialEdition exits early if HC already
+    // provided cover + description + enough categories, so this is low-cost.
+    const book = await enrichSpecialEdition(hcBook, signal, true);
     isbnCache[isbn] = book;
     return [book];
   }
@@ -1784,6 +1800,109 @@ async function fetchFromGoogleBooks(query, signal = null) {
     } catch { return []; }
   }
   return [];
+}
+
+// ── Hardcover API ─────────────────────────────────────────────────────────────
+
+// Maps a Hardcover edition record to the internal book format.
+// cached_tags is an object keyed by category ("Genre", "Mood", "Content Warning",
+// "Tag"), each value an array of { tag, tagSlug, ... } objects. We flatten all
+// tag names into one lowercase array so the existing ageRating() and
+// hasRomanticThemes() functions can process them without modification —
+// "romance", "romantasy", "sexual content", "torture" etc. all feed straight in.
+function bookFromHardcoverEdition(edition) {
+  if (!edition?.title) return null;
+  const book    = edition.book ?? {};
+  const isbn    = edition.isbn_13 ?? edition.isbn_10 ?? null;
+  const authors = (book.contributions ?? [])
+    .map(c => c?.author?.name).filter(Boolean);
+
+  // Flatten all tag names across every cached_tags category into a single
+  // lowercase array. Hardcover tags like "Romantasy", "Sexual content", and
+  // "Torture" map directly onto the app's existing rating keyword lists.
+  const tagGroups  = book.cached_tags ?? {};
+  const categories = Object.values(tagGroups)
+    .flat()
+    .map(t => (t?.tag ?? '').toLowerCase())
+    .filter(Boolean);
+
+  return {
+    id:            isbn ? `/isbn/${isbn}` : `/hc/${edition.id}`,
+    title:         edition.title,
+    authors,
+    description:   book.description   ?? null,
+    categories,
+    maturityRating: 'NOT_MATURE',
+    pageCount:     edition.pages       ?? null,
+    publishedDate: edition.release_date ?? null,
+    publisher:     null,
+    coverURL:      edition.image?.url  ?? null,
+    isbn,
+  };
+}
+
+// Queries Hardcover by ISBN-13, ISBN-10, or UPC-A (auto-converted to EAN-13).
+// Returns a mapped book object or null on any failure — always safe to call
+// as a best-effort fallback. Retries up to 3× on network/429 errors.
+// Fired in parallel with OL and GB searches in searchByISBN.
+async function fetchFromHardcover(isbn, signal = null) {
+  if (!HC_KEY) return null;
+
+  // Build the appropriate WHERE clause for the GraphQL query.
+  let whereClause;
+  if (isbn.length === 13)      whereClause = `isbn_13:{_eq:"${isbn}"}`;
+  else if (isbn.length === 12) whereClause = `isbn_13:{_eq:"0${isbn}"}`; // UPC-A → EAN-13
+  else if (isbn.length === 10) whereClause = `isbn_10:{_eq:"${isbn}"}`;
+  else                         return null;
+
+  const query = `{ editions(where:{${whereClause}},limit:1){` +
+    `id title isbn_13 isbn_10 pages release_date ` +
+    `image{url} ` +
+    `book{description contributions{author{name}} cached_tags}` +
+    `} }`;
+
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    if (signal?.aborted) return null;
+
+    const ctrl    = new AbortController();
+    const onAbort = () => ctrl.abort();
+    signal?.addEventListener('abort', onAbort, { once: true });
+    const timer = setTimeout(() => ctrl.abort(), 10000);
+
+    let res;
+    try {
+      res = await fetch(HC_BASE, {
+        method:  'POST',
+        headers: {
+          'Content-Type':  'application/json',
+          'Authorization': `Bearer ${HC_KEY}`,
+        },
+        body:   JSON.stringify({ query }),
+        signal: ctrl.signal,
+      });
+    } catch (e) {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
+      if (e.name === 'AbortError' && signal?.aborted) return null;
+      if (attempt < 3) { await sleep(attempt * 1000); continue; }
+      return null;
+    }
+    clearTimeout(timer);
+    signal?.removeEventListener('abort', onAbort);
+
+    if (res.status === 429) {
+      if (attempt < 3) { await sleep(attempt * 1000); continue; }
+      return null;
+    }
+    if (!res.ok) return null;
+
+    try {
+      const json     = await res.json();
+      const editions = json?.data?.editions ?? [];
+      return editions.length ? bookFromHardcoverEdition(editions[0]) : null;
+    } catch { return null; }
+  }
+  return null;
 }
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
