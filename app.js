@@ -1,6 +1,6 @@
 'use strict';
 
-const APP_VERSION = '1.30';
+const APP_VERSION = '1.31';
 
 // ── Theme colours for age rating badges ───────────────────────────────────────
 const AGE_COLOURS = {
@@ -43,6 +43,11 @@ function switchTab(tab) {
   // was wiping the search fields the user hadn't typed anything in yet, and
   // aborting any in-flight search request unnecessarily.
   if (currentTab === 'search' && tab !== 'search') clearSearch();
+  if (currentTab === 'scan' && tab !== 'scan') {
+    activeLookupId++;
+    const r = document.getElementById('scan-result');
+    if (r) { r.innerHTML = ''; r.classList.add('hidden'); }
+  }
   currentTab = tab;
   document.querySelectorAll('.view:not(.modal)').forEach(v => v.classList.remove('active'));
   document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
@@ -314,7 +319,7 @@ async function handleScannedISBN(isbn) {
         <div class="wisp-orb"></div><div class="wisp-orb"></div>
         <div class="wisp-orb"></div><div class="wisp-orb"></div>
       </div>
-      <p class="scan-status-title">Searching…</p>
+      <p class="scan-status-title">Consulting the tomes…</p>
       <p class="scan-status-sub">Looking up barcode in the catalogue</p>
       <p style="font-size:11px;opacity:0.45;margin-top:6px;letter-spacing:0.5px;font-family:monospace">${escHtml(isbn)}</p>
     </div>`;
@@ -333,7 +338,7 @@ async function handleScannedISBN(isbn) {
     const title   = isNetworkError ? 'Connection problem'   : 'Book not found';
     const message = isNetworkError
       ? 'Could not reach the catalogue. Check your connection and try again.'
-      : 'No match for this barcode in the catalogue. Try searching by title or author.';
+      : 'No match for this barcode in the catalogue.';
     resultEl.innerHTML = `
       <div class="scan-status-card">
         <p style="font-size:28px">${isNetworkError ? '⚠️' : '📚'}</p>
@@ -922,8 +927,11 @@ function infoHTML() {
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
         Where the book data comes from
       </h2>
-      <p>Open Library is a free, non-profit book catalogue run by the Internet Archive. It contains records for millions of books contributed by libraries, publishers, and readers around the world.<br><br>
-      When you scan a barcode or search by title or author, Wisp Scanner queries Open Library in real time and displays whatever information is available for that book. Because the catalogue is community-maintained, the completeness of any given record — cover image, page count, publisher, subject tags — can vary.</p>
+      <p>Wisp Scanner draws from three book databases to give you the most complete picture possible:</p>
+      <p><strong style="color:var(--gold)">Open Library</strong> is a free, community-run catalogue maintained by the Internet Archive. It holds records for millions of books from libraries and publishers around the world. This is the primary source for descriptions, cover images, page counts, and subject tags.</p>
+      <p><strong style="color:var(--gold)">Google Books</strong> steps in when a book is too new to appear on Open Library yet — particularly recent hardcover releases. It provides cover images, descriptions, and publication details for titles that are still fresh off the press.</p>
+      <p><strong style="color:var(--gold)">Hardcover</strong> is a modern book-tracking platform with a rich catalogue that includes many new and upcoming releases. When a book can't be found elsewhere, Wisp Scanner checks Hardcover as a final fallback — it's especially useful for limited-edition and specialty releases.<br><br>
+      Because these catalogues are community-maintained and not always complete, some details — like cover images, page counts, or subject tags — may occasionally be missing or imprecise.</p>
     </div>
     <hr class="info-divider">
     <div class="info-section">
@@ -944,7 +952,7 @@ function infoHTML() {
       This flag is not a measure of how explicit the content is. A book can carry the romantic themes flag at any age rating, from Young Adult to Mature. Books with sparse or missing tags may not show the flag even when romantic themes are present.</p>
     </div>
     <hr class="info-divider">
-    <p class="attribution">Book data is sourced from Open Library (openlibrary.org), a project of the Internet Archive, and is made available under open licensing. Cover images are served from the Open Library Covers API.</p>
+    <p class="attribution">Book data is sourced from Open Library (openlibrary.org), a project of the Internet Archive; Google Books (books.google.com); and Hardcover (hardcover.app). Open Library data is made available under open licensing.</p>
     <p class="attribution" style="margin-top:8px;opacity:0.45">Version ${APP_VERSION}</p>`;
 }
 

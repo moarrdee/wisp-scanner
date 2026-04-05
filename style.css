@@ -163,17 +163,7 @@ img.nav-logo {
   pointer-events: none; /* children re-enable where needed */
 }
 
-/* Dark vignette with transparent scan-zone window — matches iOS ScanVignetteShape */
-.scan-cutout {
-  position: absolute;
-  inset: 0;
-  /* even-odd technique: full-screen dark mask minus the scan rectangle */
-  background:
-    linear-gradient(#000000a0, #000000a0) top    / 100% calc(50% - 60px) no-repeat,
-    linear-gradient(#000000a0, #000000a0) bottom / 100% calc(50% - 60px) no-repeat,
-    linear-gradient(#000000a0, #000000a0) left   / calc(50% - 140px) 120px no-repeat,
-    linear-gradient(#000000a0, #000000a0) right  / calc(50% - 140px) 120px no-repeat;
-}
+/* Dark vignette is now created by box-shadow on #scan-box — see below */
 
 /* ── Ambient wisp orbs around the scan zone — match iOS wispOrbs() ── */
 .scan-wisp {
@@ -181,6 +171,7 @@ img.nav-logo {
   border-radius: 50%;
   pointer-events: none;
   animation: pulse 3s ease-in-out infinite alternate;
+  z-index: 4;
 }
 .scan-wisp-tl  { width:36px;height:36px; background:radial-gradient(circle,#9b804a55 0%,#9b804a22 50%,transparent 70%); box-shadow:0 0 22px #9b804a33; top:28%; left:6%;  animation-duration:2.8s; }
 .scan-wisp-tr  { width:26px;height:26px; background:radial-gradient(circle,#9b804a55 0%,#9b804a22 50%,transparent 70%); box-shadow:0 0 16px #9b804a33; top:52%; right:6%; animation-duration:3.4s; }
@@ -194,6 +185,7 @@ img.nav-logo {
   position: absolute;
   top: calc(50% - 118px);
   left: 50%; transform: translateX(-50%);
+  z-index: 4;
   background: rgba(0,0,0,0.62);
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
@@ -216,21 +208,21 @@ img.nav-logo {
   opacity: 0.75;
 }
 
-/* Scan zone box */
+/* Scan zone box — box-shadow creates the full-screen dark vignette with cutout */
 #scan-box {
   position: relative;
   width: 280px; height: 120px;
   background: transparent;
+  border-radius: 10px;
   z-index: 3;
+  box-shadow: 0 0 0 2000px rgba(0,0,0,0.62);
   transition: box-shadow 0.15s;
 }
 #scan-box.detected {
-  box-shadow: 0 0 0 3px var(--gold);
-  border-radius: 10px;
+  box-shadow: 0 0 0 2000px rgba(0,0,0,0.62), 0 0 0 3px var(--gold);
 }
 #scan-box.locking {
-  box-shadow: 0 0 0 2px rgba(155,128,74,0.45);
-  border-radius: 10px;
+  box-shadow: 0 0 0 2000px rgba(0,0,0,0.62), 0 0 0 2px rgba(155,128,74,0.45);
   transition: box-shadow 0.1s;
 }
 
@@ -285,7 +277,7 @@ img.nav-logo {
   top: calc(50% + 80px);
   left: 0; right: 0;
   text-align: center;
-  z-index: 3;
+  z-index: 4;
   pointer-events: none;
   opacity: 0;
   transition: opacity 0.15s;
@@ -307,6 +299,7 @@ img.nav-logo {
   top: calc(50% + 80px);
   left: 50%; transform: translateX(-50%);
   height: fit-content;
+  z-index: 4;
   display: flex; align-items: center; gap: 6px;
   background: rgba(0,0,0,0.52);
   backdrop-filter: blur(6px);
