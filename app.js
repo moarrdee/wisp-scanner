@@ -1159,9 +1159,30 @@ const SEARCH_FIELDS = 'key,title,author_name,subject,cover_i,number_of_pages_med
 
 // ── Google Books API (fallback for new releases missing from Open Library) ────
 const GB_BASE = 'https://www.googleapis.com/books/v1/volumes';
-// Free API key from console.cloud.google.com/apis/library/books.googleapis.com
-// Leave empty to use keyless requests (adequate for a single-shop scanner)
+// REQUIRED: The keyless GB API silently returns 0 results for all queries —
+// even bestsellers — without a registered key. Obtain a free key at:
+// console.cloud.google.com/apis/library/books.googleapis.com
+// then paste it below. The Books API free quota (1,000 requests/day) is more
+// than sufficient for a single-shop scanner.
 const GB_KEY  = '';
+
+// ── Manual ISBN metadata hints ───────────────────────────────────────────────
+// Deluxe / Limited Edition ISBNs that haven't yet been indexed by Open Library
+// or Google Books under their specific ISBN. When all automatic API lookups
+// fail for a scanned ISBN, this table provides the title + author needed to
+// run an OL full-text search (which reliably finds the book by name).
+// Add new entries whenever a new release or special edition fails to scan.
+// Key: ISBN-13 as printed on the back cover barcode.
+const ISBN_METADATA_HINTS = {
+  // We Who Will Die — Stacia Stark (HarperCollins US Deluxe Limited Edition, 2025)
+  '9780063436718': { title: 'We Who Will Die',  author: 'Stacia Stark'   },
+  // Dire Bound — Sable Sorensen (Little, Brown Deluxe Limited Edition, 2026)
+  '9780316601399': { title: 'Dire Bound',        author: 'Sable Sorensen' },
+  // Starside — Alex Aster (HarperCollins US Deluxe Limited Edition, 2026)
+  // Two entries cover both the printed ISBN and the corrected-check-digit variant
+  '9780063462433': { title: 'Starside',          author: 'Alex Aster'     },
+  '9780063462434': { title: 'Starside',          author: 'Alex Aster'     },
+};
 
 async function fetchWithRetry(url, maxAttempts = 3, signal = null) {
   let attempt = 0;
@@ -1354,7 +1375,33 @@ async function searchByISBN(isbn, signal = null) {
       }
     } catch (e) {
       if (e.name === 'AbortError' && signal?.aborted) throw e;
-      // silently fall through to the final error
+      // silently fall through to the next fallback
+    }
+  }
+
+  // ── Hints fallback: ISBN_METADATA_HINTS → OL q= title+author search ──────────
+  // Used for Deluxe/Limited edition ISBNs that are not yet in OL or GB under
+  // their specific barcode ISBN. OL's full-text q= search reliably finds these
+  // books by title+author even when isbn= and the /isbn/ endpoint both return
+  // nothing. Results are enriched and cached like any other lookup.
+  const hint = ISBN_METADATA_HINTS[isbn];
+  if (hint && !signal?.aborted) {
+    try {
+      const q      = `${hint.title} ${hint.author}`;
+      const params = new URLSearchParams({ q, fields: SEARCH_FIELDS, limit: '5' });
+      const hintRes = await fetchWithRetry(`${SEARCH_BASE}?${params}`, 3, signal);
+      const hintJson = await hintRes.json();
+      const hintDocs = (hintJson.docs || []).map(bookFromDoc).filter(Boolean);
+      if (hintDocs.length) {
+        // Use the best-matching doc (first result) and enrich it as a special
+        // edition so the original Deluxe title, cover, and description are filled in.
+        const book = await enrichSpecialEdition(hintDocs[0], signal);
+        isbnCache[isbn] = book;
+        return [book];
+      }
+    } catch (e) {
+      if (e.name === 'AbortError' && signal?.aborted) throw e;
+      // fall through to final error
     }
   }
 
