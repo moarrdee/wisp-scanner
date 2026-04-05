@@ -1,6 +1,6 @@
 'use strict';
 
-const APP_VERSION = '1.35';
+const APP_VERSION = '2.0';
 const LOGO_URL = 'https://www.wispbookshop.com/uploads/b/83d087e4aa8e2de4459401d9bcf103ff53ee9d453751c4902ece251eb7bbef58/Wisp-Bookshop-Logo-3_1752237750.png';
 
 // ── Theme colours for age rating badges ───────────────────────────────────────
