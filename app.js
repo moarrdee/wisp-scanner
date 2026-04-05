@@ -1,6 +1,6 @@
 'use strict';
 
-const APP_VERSION = '1.29';
+const APP_VERSION = '1.30';
 
 // ── Theme colours for age rating badges ───────────────────────────────────────
 const AGE_COLOURS = {
@@ -1616,6 +1616,10 @@ async function searchByQuery(title, author, signal = null) {
   const cacheKey = params.toString();
   if (queryCache[cacheKey]) return queryCache[cacheKey];
 
+  // Fire Hardcover search in parallel from the start so results are ready if
+  // OL returns a sparse record (no description) or nothing at all.
+  const _hc = fetchFromHardcoverByQuery(title, author, signal).catch(() => []);
+
   // Author-only optimisation: try the specific author= index first — it hits a
   // dedicated Solr field and returns faster. Fall back to q= (full-text) only
   // if author= comes back empty, since some authors aren't indexed under author=.
@@ -1674,7 +1678,7 @@ async function searchByQuery(title, author, signal = null) {
     }
 
     // GB also found nothing — try Hardcover full-text search as final fallback.
-    const hcResults = await fetchFromHardcoverByQuery(title, author, signal).catch(() => []);
+    const hcResults = await _hc;
     if (hcResults.length) {
       queryCache[cacheKey] = hcResults;
       return hcResults;
@@ -1682,10 +1686,38 @@ async function searchByQuery(title, author, signal = null) {
 
     throw new Error('No books found. Try a different search.');
   }
+
   // Enrich with descriptions before caching — mirrors iOS search() which calls
   // enrichSearchResults() before storing results. Cache always holds enriched books
   // so cache hits render with correct age/romance ratings immediately.
   books = await enrichWithDescriptions(books, signal);
+
+  // OL found results but some may still lack a description (common for new or
+  // deluxe editions whose OL record is sparse). Await the already-in-flight HC
+  // search and use it to fill in any books that are missing a description or
+  // have very few categories — ensuring partial author queries ("Aster" instead
+  // of "Alex Aster") return the same enriched result as exact queries.
+  const anyMissingDesc = books.some(b => !b.description || b.categories.length < 3);
+  if (anyMissingDesc) {
+    const hcResults = await _hc;
+    if (hcResults.length) {
+      books = books.map(olBook => {
+        if (olBook.description && olBook.categories.length >= 3) return olBook;
+        const match = hcResults.find(
+          h => h.title.trim().toLowerCase() === olBook.title.trim().toLowerCase()
+        );
+        if (!match) return olBook;
+        return {
+          ...olBook,
+          description: olBook.description || match.description,
+          categories:  match.categories.length > olBook.categories.length
+                         ? match.categories : olBook.categories,
+          coverURL:    olBook.coverURL || match.coverURL,
+        };
+      });
+    }
+  }
+
   queryCache[cacheKey] = books;
   return books;
 }
