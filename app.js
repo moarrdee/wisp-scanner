@@ -1167,9 +1167,10 @@ const GB_BASE = 'https://www.googleapis.com/books/v1/volumes';
 const GB_KEY  = 'AIzaSyAY-W7OstK1cuGGwMxeuxZuP8G759oToDk';
 
 // ── Hardcover API (fallback for new releases with gaps in OL and Google Books) ─
-const HC_BASE = 'https://api.hardcover.app/v1/graphql';
-// Free bearer token — obtain from hardcover.app → Account Settings → Hardcover API
-const HC_KEY  = 'eyJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJIYXJkY292ZXIiLCJ2ZXJzaW9uIjoiOCIsImp0aSI6ImQ3YzhjMjM1LWMwMzEtNDQwOS04NmQ2LTU2MWRlMDE3ODVhYiIsImFwcGxpY2F0aW9uSWQiOjIsInN1YiI6Ijg4Nzk2IiwiYXVkIjoiMSIsImlkIjoiODg3OTYiLCJsb2dnZWRJbiI6dHJ1ZSwiaWF0IjoxNzc1MzUwNTAyLCJleHAiOjE4MDY4ODY1MDIsImh0dHBzOi8vaGFzdXJhLmlvL2p3dC9jbGFpbXMiOnsieC1oYXN1cmEtYWxsb3dlZC1yb2xlcyI6WyJ1c2VyIl0sIngtaGFzdXJhLWRlZmF1bHQtcm9sZSI6InVzZXIiLCJ4LWhhc3VyYS1yb2xlIjoidXNlciIsIlgtaGFzdXJhLXVzZXItaWQiOiI4ODc5NiJ9LCJ1c2VyIjp7ImlkIjo4ODc5Nn19.mdkNvNI-x6Y2Q7Kib682nEaTXaJUmlGswH0SrZ_IMAo';
+// Requests are routed through a Cloudflare Worker proxy that holds the bearer
+// token server-side, solving the CORS preflight issue with the Hardcover API.
+const HC_BASE = 'https://wisp-hc-proxy.moarrdee.workers.dev';
+const HC_KEY  = null; // token lives in the Worker — not needed client-side
 
 async function fetchWithRetry(url, maxAttempts = 3, signal = null) {
   let attempt = 0;
@@ -1873,12 +1874,9 @@ async function fetchFromHardcover(isbn, signal = null) {
     try {
       res = await fetch(HC_BASE, {
         method:  'POST',
-        headers: {
-          'Content-Type':  'application/json',
-          'Authorization': `Bearer ${HC_KEY}`,
-        },
-        body:   JSON.stringify({ query }),
-        signal: ctrl.signal,
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ query }),
+        signal:  ctrl.signal,
       });
     } catch (e) {
       clearTimeout(timer);
